@@ -1,0 +1,140 @@
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap');
+@import "@fontsource-variable/geist";
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+:root {
+  --background: #F8FAFC;
+  --foreground: #0F172A;
+  --card: #FFFFFF;
+  --card-foreground: #0F172A;
+  --popover: #FFFFFF;
+  --popover-foreground: #0F172A;
+  --primary: #2563EB;
+  --primary-foreground: #FFFFFF;
+  --secondary: #F1F5F9;
+  --secondary-foreground: #0F172A;
+  --muted: #F8FAFC;
+  --muted-foreground: #64748B;
+  --accent: #F1F5F9;
+  --accent-foreground: #0F172A;
+  --destructive: #EF4444;
+  --destructive-foreground: #FFFFFF;
+  --border: #E2E8F0;
+  --input: #F1F5F9;
+  --ring: #2563EB;
+  --radius: 0.75rem;
+}
+
+@theme inline {
+  --font-sans: "Plus Jakarta Sans", "Inter", sans-serif;
+
+  --color-brand-bg: #F8FAFC;
+  --color-brand-surface: #FFFFFF;
+  --color-brand-primary: #2563EB;
+  --color-brand-text: #0F172A;
+  --color-brand-muted: #64748B;
+
+  --color-status-paid-bg: #EFF6FF;
+  --color-status-paid-text: #1D4ED8;
+  --color-status-paid-border: #60A5FA;
+  --color-status-unpaid-bg: #FFF7ED;
+  --color-status-unpaid-text: #C2410C;
+  --color-status-unpaid-border: #FDBA74;
+  --color-status-partPaid-bg: #FDF2F8;
+  --color-status-partPaid-text: #BE185D;
+  --color-status-partPaid-border: #F472B6;
+  --color-status-vacant-bg: #F1F5F9;
+  --color-status-vacant-text: #475569;
+  --color-status-vacant-border: #CBD5E1;
+
+  --radius-lg: 0.75rem;
+  --radius-xl: 1rem;
+  --radius-2xl: 1.5rem;
+  --radius-3xl: 2rem;
+
+  --shadow-soft: 0 10px 40px -10px rgba(0, 0, 0, 0.04);
+  --shadow-float: 0 20px 50px -10px rgba(0, 0, 0, 0.08);
+
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-brand-bg text-brand-text font-sans;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* Animations */
+@keyframes slide-in-right {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes fade-up {
+  from {
+    transform: translateY(12px);
+    opacity: 0;
+  }
+
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+.animate-slide-in-right {
+  animation: slide-in-right 0.25s ease-out;
+}
+
+.animate-fade-up {
+  animation: fade-up 0.3s ease-out;
+}

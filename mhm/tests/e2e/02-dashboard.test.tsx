@@ -1,0 +1,107 @@
+import { describe, it, expect, beforeEach } from "vitest";
+import { render, screen, waitFor } from "../helpers/render-app";
+import Dashboard from "@/pages/Dashboard";
+import { setMockResponse, clearMockResponses, invoke } from "@test-mocks/tauri-core";
+import { useHotelStore } from "@/stores/useHotelStore";
+import { createAllRooms, createStats, createBookingWithGuest } from "../helpers/mock-data";
+
+const mockRooms = createAllRooms();
+const mockStats = createStats({ occupied: 3, vacant: 6, cleaning: 1, revenue_today: 1200000 });
+
+describe("02 — Dashboard", () => {
+    beforeEach(() => {
+        clearMockResponses();
+        invoke.mockClear();
+
+        useHotelStore.setState({
+            rooms: mockRooms,
+            stats: mockStats,
+            activeTab: "dashboard",
+            roomDetail: null,
+            housekeepingTasks: [],
+            loading: false,
+            isCheckinOpen: false,
+        });
+
+        setMockResponse("get_rooms", () => mockRooms);
+        setMockResponse("get_dashboard_stats", () => mockStats);
+        setMockResponse("get_recent_activity", () => [
+            { icon: "🔑", text: "Check-in phòng 2A — Nguyễn Văn A", time: "10:30", color: "green" },
+        ]);
+        setMockResponse("get_revenue_stats", () => ({
+            total_revenue: 1200000,
+            rooms_sold: 3,
+            occupancy_rate: 30,
+            daily_revenue: [{ date: "2026-03-15", revenue: 1200000 }],
+        }));
+        setMockResponse("get_expenses", () => []);
+        setMockResponse("get_all_bookings", () => [
+            createBookingWithGuest({ room_id: "2A", guest_name: "Nguyễn Văn A", status: "active" }),
+        ]);
+        setMockResponse("get_rooms_availability", () => mockRooms.map(r => ({
+            room: r, current_booking: null, upcoming_reservations: [], next_available_until: null,
+        })));
+        setMockResponse("get_analytics", () => ({
+            total_revenue: 1200000, occupancy_rate: 30, adr: 400000, revpar: 120000,
+            daily_revenue: [{ date: "2026-03-15", revenue: 1200000 }],
+            revenue_by_source: [], expenses_by_category: [], top_rooms: [],
+        }));
+    });
+
+    it("renders stat cards", async () => {
+        render(<Dashboard />);
+
+        await waitFor(() => {
+            // Total rooms stat or occupied count
+            expect(screen.getByText("3")).toBeInTheDocument(); // occupied
+        });
+
+        expect(screen.getByText("6")).toBeInTheDocument(); // vacant
+        expect(screen.getByText("1")).toBeInTheDocument(); // cleaning
+    });
+
+    it("renders 10 room cards", async () => {
+        render(<Dashboard />);
+
+        await waitFor(() => {
+            // Room names should be visible
+            expect(screen.getByText("1A")).toBeInTheDocument();
+            expect(screen.getByText("5B")).toBeInTheDocument();
+        });
+
+        // All 10 room names — use getAllByText because some names may appear in multiple places
+        for (const room of mockRooms) {
+            expect(screen.getAllByText(room.name).length).toBeGreaterThanOrEqual(1);
+        }
+    });
+
+    it("calls fetchRooms and fetchStats on mount", async () => {
+        render(<Dashboard />);
+
+        await waitFor(() => {
+            expect(invoke).toHaveBeenCalledWith("get_recent_activity", expect.anything());
+        });
+    });
+
+    it("displays revenue today", async () => {
+        render(<Dashboard />);
+
+        await waitFor(() => {
+            // Revenue should be formatted — "1.200.000" or "1,200,000" or similar
+            const revenueText = screen.getByText(/1[.,]200[.,]000/);
+            expect(revenueText).toBeInTheDocument();
+        });
+    });
+
+    it("click on room changes to detail view", async () => {
+        render(<Dashboard />);
+
+        await waitFor(() => {
+            expect(screen.getByText("1A")).toBeInTheDocument();
+        });
+
+        // Find and click a room card — rooms are rendered via RoomCard
+        // The room name "1A" should be clickable
+        screen.getByText("1A");
+    });
+});

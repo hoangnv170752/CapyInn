@@ -1,0 +1,195 @@
+openapi: '3.1.0'
+info:
+  title: Hotel Manager MCP Gateway
+  version: '0.1.0'
+  description: |
+    Hotel Management System MCP Gateway API.
+    Exposes room management, booking, pricing, and reservation tools via MCP protocol.
+    All dates use YYYY-MM-DD format. Timezone: Asia/Ho_Chi_Minh.
+  contact:
+    name: Hotel Manager
+servers:
+  - url: http://127.0.0.1:61234
+    description: Local MCP Gateway (default port)
+
+paths:
+  /mcp:
+    post:
+      summary: MCP Streamable HTTP Endpoint
+      description: Send JSON-RPC requests to interact with MCP tools
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/JsonRpcRequest'
+      responses:
+        '200':
+          description: JSON-RPC response
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/JsonRpcResponse'
+
+  /health:
+    get:
+      summary: Health Check
+      responses:
+        '200':
+          description: Gateway is running
+          content:
+            text/plain:
+              schema:
+                type: string
+                example: OK
+
+components:
+  schemas:
+    JsonRpcRequest:
+      type: object
+      required: [jsonrpc, method, id]
+      properties:
+        jsonrpc:
+          type: string
+          enum: ['2.0']
+        method:
+          type: string
+          description: 'MCP method: tools/list, tools/call, etc.'
+        id:
+          oneOf:
+            - type: string
+            - type: integer
+        params:
+          type: object
+
+    JsonRpcResponse:
+      type: object
+      properties:
+        jsonrpc:
+          type: string
+        id:
+          oneOf:
+            - type: string
+            - type: integer
+        result:
+          type: object
+        error:
+          type: object
+
+    # ─── Tool Input Schemas ───
+
+    CheckAvailabilityInput:
+      type: object
+      required: [room_id, from_date, to_date]
+      properties:
+        room_id:
+          type: string
+          description: Room ID to check
+        from_date:
+          type: string
+          format: date
+          description: Start date (YYYY-MM-DD)
+        to_date:
+          type: string
+          format: date
+          description: End date (YYYY-MM-DD)
+
+    GetRoomDetailInput:
+      type: object
+      required: [room_id]
+      properties:
+        room_id:
+          type: string
+
+    GetBookingsInput:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [active, booked, completed, cancelled]
+        from:
+          type: string
+          format: date
+        to:
+          type: string
+          format: date
+
+    GetSettingsInput:
+      type: object
+      required: [key]
+      properties:
+        key:
+          type: string
+          description: 'Setting key: hotel_name, hotel_address, hotel_phone, hotel_rules'
+
+    CalculatePriceInput:
+      type: object
+      required: [room_type, check_in, check_out, pricing_type]
+      properties:
+        room_type:
+          type: string
+        check_in:
+          type: string
+          format: date-time
+        check_out:
+          type: string
+          format: date-time
+        pricing_type:
+          type: string
+          enum: [nightly, hourly, overnight, daily]
+
+    CreateReservationInput:
+      type: object
+      required: [room_id, guest_name, guest_phone, check_in_date, check_out_date, nights]
+      properties:
+        room_id:
+          type: string
+        guest_name:
+          type: string
+        guest_phone:
+          type: string
+        guest_doc_number:
+          type: string
+          nullable: true
+        check_in_date:
+          type: string
+          format: date
+        check_out_date:
+          type: string
+          format: date
+        nights:
+          type: integer
+          minimum: 1
+        deposit_amount:
+          type: number
+          nullable: true
+        source:
+          type: string
+          nullable: true
+          default: ai-agent
+        notes:
+          type: string
+          nullable: true
+
+    CancelReservationInput:
+      type: object
+      required: [booking_id]
+      properties:
+        booking_id:
+          type: string
+
+    ModifyReservationInput:
+      type: object
+      required: [booking_id, new_check_in_date, new_check_out_date, new_nights]
+      properties:
+        booking_id:
+          type: string
+        new_check_in_date:
+          type: string
+          format: date
+        new_check_out_date:
+          type: string
+          format: date
+        new_nights:
+          type: integer
+          minimum: 1

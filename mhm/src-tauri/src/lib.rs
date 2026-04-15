@@ -1,0 +1,176 @@
+use tauri::Manager;
+
+mod commands;
+mod db;
+pub mod gateway;
+mod models;
+mod ocr;
+mod pricing;
+mod watcher;
+
+use commands::AppState;
+use std::sync::{Arc, Mutex};
+
+/// Run the Tauri GUI application with MCP Gateway
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
+pub fn run() {
+    tauri::Builder::default()
+        .plugin(tauri_plugin_opener::init())
+        .setup(|app| {
+            let rt = tokio::runtime::Runtime::new().expect("Failed to create Tokio runtime");
+            let pool = rt.block_on(db::init_db()).expect("Failed to init database");
+
+            // Start MCP Gateway server on a dedicated background thread.
+            // The runtime must outlive the setup closure, otherwise the spawned
+            // axum server task gets cancelled when the runtime drops.
+            let gateway_pool = pool.clone();
+            let gateway_handle = app.handle().clone();
+            rt.block_on(async {
+                match gateway::start_gateway(gateway_pool, gateway_handle).await {
+                    Ok(port) => eprintln!("MCP Gateway started on port {}", port),
+                    Err(e) => eprintln!("Failed to start MCP Gateway: {}", e),
+                }
+            });
+
+            // Keep the Tokio runtime alive for the entire app lifetime.
+            // This is intentional — the gateway server runs as a spawned task
+            // on this runtime and must not be dropped.
+            std::mem::forget(rt);
+
+            app.manage(AppState {
+                db: pool,
+                current_user: Arc::new(Mutex::new(None)),
+            });
+
+            // Create ~/MHM/models/ directory
+            if let Some(home) = dirs::home_dir() {
+                let models_dir = home.join("MHM").join("models");
+                let _ = std::fs::create_dir_all(&models_dir);
+            }
+
+            // Start file watcher in background
+            let handle = app.handle().clone();
+            std::thread::spawn(move || {
+                if let Err(e) = watcher::start_watcher(handle) {
+                    eprintln!("Failed to start file watcher: {}", e);
+                }
+            });
+
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            // Room & Booking Operations
+            commands::rooms::get_rooms,
+            commands::rooms::get_dashboard_stats,
+            commands::rooms::check_in,
+            commands::rooms::get_room_detail,
+            commands::rooms::check_out,
+            commands::rooms::extend_stay,
+            commands::rooms::get_housekeeping_tasks,
+            commands::rooms::update_housekeeping,
+            commands::rooms::create_expense,
+            commands::rooms::get_expenses,
+            commands::rooms::get_revenue_stats,
+            commands::rooms::get_stay_info_text,
+            commands::rooms::scan_image,
+            // Bookings & Guests
+            commands::bookings::get_all_bookings,
+            commands::guests::get_all_guests,
+            commands::guests::get_guest_history,
+            // Analytics
+            commands::analytics::get_analytics,
+            commands::analytics::get_recent_activity,
+            // Room Management
+            commands::room_management::update_room,
+            commands::room_management::create_room,
+            commands::room_management::delete_room,
+            commands::room_management::get_room_types,
+            commands::room_management::create_room_type,
+            commands::room_management::delete_room_type,
+            commands::room_management::export_csv,
+            // Settings
+            commands::settings::save_settings,
+            commands::settings::get_settings,
+            commands::onboarding::get_bootstrap_status,
+            commands::onboarding::complete_onboarding,
+            // Auth & RBAC
+            commands::auth::login,
+            commands::auth::logout,
+            commands::auth::get_current_user,
+            commands::auth::list_users,
+            commands::auth::create_user,
+            commands::auth::search_guest_by_phone,
+            // Pricing Engine
+            commands::pricing::get_pricing_rules,
+            commands::pricing::save_pricing_rule,
+            commands::pricing::calculate_price_preview,
+            commands::pricing::get_special_dates,
+            commands::pricing::save_special_date,
+            // Folio/Billing
+            commands::billing::add_folio_line,
+            commands::billing::get_folio_lines,
+            // Night Audit
+            commands::audit::run_night_audit,
+            commands::audit::get_audit_logs,
+            // Backup & Export
+            commands::audit::backup_database,
+            commands::audit::export_bookings_csv,
+            // Reservation Calendar
+            commands::reservations::check_availability,
+            commands::reservations::create_reservation,
+            commands::reservations::confirm_reservation,
+            commands::reservations::cancel_reservation,
+            commands::reservations::modify_reservation,
+            commands::reservations::get_room_calendar,
+            commands::reservations::get_rooms_availability,
+            // MCP Gateway
+            gateway_generate_key,
+            gateway_get_status,
+            // Invoice PDF
+            commands::invoices::generate_invoice,
+            commands::invoices::get_invoice,
+            // Group Booking
+            commands::groups::group_checkin,
+            commands::groups::group_checkout,
+            commands::groups::get_group_detail,
+            commands::groups::get_all_groups,
+            commands::groups::add_group_service,
+            commands::groups::remove_group_service,
+            commands::groups::auto_assign_rooms,
+            commands::groups::generate_group_invoice,
+        ])
+        .run(tauri::generate_context!())
+        .expect("error while running tauri application");
+}
+
+/// Run the MCP stdio proxy (Process B)
+pub fn run_proxy() {
+    gateway::proxy::run_proxy();
+}
+
+// ─── MCP Gateway Tauri Commands ───
+
+#[tauri::command]
+async fn gateway_generate_key(state: tauri::State<'_, AppState>, label: Option<String>) -> Result<String, String> {
+    let (key, hash) = gateway::auth::generate_api_key();
+    gateway::auth::store_api_key(&state.db, &hash, label.as_deref().unwrap_or("default")).await?;
+    Ok(key)
+}
+
+#[tauri::command]
+async fn gateway_get_status(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+    let has_keys = gateway::auth::has_api_keys(&state.db).await;
+    let port = if let Some(home) = dirs::home_dir() {
+        std::fs::read_to_string(home.join("MHM").join(".gateway-port"))
+            .ok()
+            .and_then(|s| s.trim().parse::<u16>().ok())
+    } else {
+        None
+    };
+
+    Ok(serde_json::json!({
+        "running": port.is_some(),
+        "port": port,
+        "has_api_keys": has_keys,
+    }))
+}

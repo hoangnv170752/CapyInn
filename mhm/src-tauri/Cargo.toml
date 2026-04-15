@@ -1,0 +1,42 @@
+[package]
+name = "mhm"
+version = "0.1.0"
+description = "A Tauri App"
+authors = ["you"]
+edition = "2021"
+default-run = "mhm"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[lib]
+# The `_lib` suffix may seem redundant but it is necessary
+# to make the lib name unique and wouldn't conflict with the bin name.
+# This seems to be only an issue on Windows, see https://github.com/rust-lang/cargo/issues/8519
+name = "mhm_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+dirs = "6"
+ocr-rs = { version = "2.1", features = ["metal", "async"] }
+notify = "7"
+image = "0.25"
+regex = "1"
+sha2 = "0.10"
+# MCP Gateway
+rmcp = { version = "1.2", features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
+schemars = "0.8"
+axum = "0.8"
+rand = "0.8"
+tower = "0.5"
+
