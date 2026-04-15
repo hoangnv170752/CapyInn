@@ -1,8 +1,8 @@
-use sqlx::{Pool, Sqlite, Row};
-use tauri::State;
+use super::{emit_db_update, get_f64, AppState};
 use crate::models::*;
-use super::{AppState, get_f64, emit_db_update};
-
+use crate::services::booking::reservation_lifecycle;
+use sqlx::{Pool, Row, Sqlite};
+use tauri::State;
 
 // ═══════════════════════════════════════════════
 // Reservation Calendar Block System
@@ -58,96 +58,15 @@ pub async fn check_availability(state: State<'_, AppState>, room_id: String, fro
 
 // ─── Create Reservation ───
 
-pub async fn do_create_reservation(pool: &Pool<Sqlite>, app_handle: Option<&tauri::AppHandle>, req: CreateReservationRequest) -> Result<Booking, String> {
-    if req.nights <= 0 {
-        return Err("Number of nights must be greater than 0".to_string());
-    }
+pub async fn do_create_reservation(
+    pool: &Pool<Sqlite>,
+    app_handle: Option<&tauri::AppHandle>,
+    req: CreateReservationRequest,
+) -> Result<Booking, String> {
+    let booking = reservation_lifecycle::create_reservation(pool, req)
+        .await
+        .map_err(|error| error.to_string())?;
 
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-
-    let conflicts = sqlx::query(
-        "SELECT date FROM room_calendar WHERE room_id = ? AND date >= ? AND date < ?"
-    )
-    .bind(&req.room_id).bind(&req.check_in_date).bind(&req.check_out_date)
-    .fetch_all(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    if !conflicts.is_empty() {
-        let first: String = conflicts[0].get("date");
-        return Err(format!("Room {} is booked on {}. Cannot create reservation.", req.room_id, first));
-    }
-
-    let now = chrono::Local::now();
-    let deposit = req.deposit_amount.unwrap_or(0.0);
-
-    let price_row = sqlx::query("SELECT base_price FROM rooms WHERE id = ?")
-        .bind(&req.room_id)
-        .fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
-    let room_price = get_f64(&price_row, "base_price");
-    let total_price = room_price * req.nights as f64;
-
-    let guest_id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO guests (id, guest_type, full_name, doc_number, phone, created_at)
-         VALUES (?, 'domestic', ?, ?, ?, ?)"
-    )
-    .bind(&guest_id)
-    .bind(&req.guest_name)
-    .bind(req.guest_doc_number.as_deref().unwrap_or(""))
-    .bind(&req.guest_phone)
-    .bind(now.to_rfc3339())
-    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    let booking_id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO bookings (id, room_id, primary_guest_id, check_in_at, expected_checkout, nights, total_price, paid_amount, status, source, notes, created_by, booking_type, deposit_amount, guest_phone, scheduled_checkin, scheduled_checkout, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'booked', ?, ?, NULL, 'reservation', ?, ?, ?, ?, ?)"
-    )
-    .bind(&booking_id)
-    .bind(&req.room_id)
-    .bind(&guest_id)
-    .bind(&req.check_in_date)
-    .bind(&req.check_out_date)
-    .bind(req.nights)
-    .bind(total_price)
-    .bind(deposit)
-    .bind(req.source.as_deref().unwrap_or("phone"))
-    .bind(&req.notes)
-    .bind(deposit)
-    .bind(&req.guest_phone)
-    .bind(&req.check_in_date)
-    .bind(&req.check_out_date)
-    .bind(now.to_rfc3339())
-    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    sqlx::query("INSERT INTO booking_guests (booking_id, guest_id) VALUES (?, ?)")
-        .bind(&booking_id).bind(&guest_id)
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    let from = chrono::NaiveDate::parse_from_str(&req.check_in_date, "%Y-%m-%d")
-        .map_err(|e| e.to_string())?;
-    let to = chrono::NaiveDate::parse_from_str(&req.check_out_date, "%Y-%m-%d")
-        .map_err(|e| e.to_string())?;
-    let mut d = from;
-    while d < to {
-        sqlx::query(
-            "INSERT INTO room_calendar (room_id, date, booking_id, status) VALUES (?, ?, ?, 'booked')"
-        )
-        .bind(&req.room_id).bind(d.format("%Y-%m-%d").to_string()).bind(&booking_id)
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-        d += chrono::Duration::days(1);
-    }
-
-    if deposit > 0.0 {
-        let txn_id = uuid::Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO transactions (id, booking_id, amount, type, note, created_at)
-             VALUES (?, ?, ?, 'deposit', 'Reservation deposit', ?)"
-        )
-        .bind(&txn_id).bind(&booking_id).bind(deposit).bind(now.to_rfc3339())
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-    }
-
-    tx.commit().await.map_err(|e| e.to_string())?;
     if let Some(app) = app_handle {
         emit_db_update(app, "rooms");
     }
@@ -268,58 +187,15 @@ pub async fn confirm_reservation(state: State<'_, AppState>, app: tauri::AppHand
 
 // ─── Cancel Reservation ───
 
-pub async fn do_cancel_reservation(pool: &Pool<Sqlite>, app_handle: Option<&tauri::AppHandle>, booking_id: &str) -> Result<(), String> {
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
+pub async fn do_cancel_reservation(
+    pool: &Pool<Sqlite>,
+    app_handle: Option<&tauri::AppHandle>,
+    booking_id: &str,
+) -> Result<(), String> {
+    reservation_lifecycle::cancel_reservation(pool, booking_id)
+        .await
+        .map_err(|error| error.to_string())?;
 
-    let row = sqlx::query("SELECT room_id, status, deposit_amount FROM bookings WHERE id = ?")
-        .bind(booking_id)
-        .fetch_one(&mut *tx).await.map_err(|e| format!("Booking not found: {}", e))?;
-
-    let status: String = row.get("status");
-    if status != "booked" {
-        return Err(format!("Can only cancel reservations in 'booked' status (current: {})", status));
-    }
-
-    let room_id: String = row.get("room_id");
-    let deposit: f64 = row.try_get::<f64, _>("deposit_amount").unwrap_or(0.0);
-    let now = chrono::Local::now();
-
-    sqlx::query("UPDATE bookings SET status = 'cancelled' WHERE id = ?")
-        .bind(booking_id)
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    sqlx::query("DELETE FROM room_calendar WHERE booking_id = ?")
-        .bind(booking_id)
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    let future: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM room_calendar WHERE room_id = ?"
-    )
-    .bind(&room_id)
-    .fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    let room_row = sqlx::query("SELECT status FROM rooms WHERE id = ?")
-        .bind(&room_id)
-        .fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
-    let current_room_status: String = room_row.get("status");
-
-    if current_room_status == "booked" && future.0 == 0 {
-        sqlx::query("UPDATE rooms SET status = 'vacant' WHERE id = ?")
-            .bind(&room_id)
-            .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-    }
-
-    if deposit > 0.0 {
-        let txn_id = uuid::Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO transactions (id, booking_id, amount, type, note, created_at)
-             VALUES (?, ?, ?, 'cancellation_fee', 'Deposit retained (cancellation)', ?)"
-        )
-        .bind(&txn_id).bind(booking_id).bind(deposit).bind(now.to_rfc3339())
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-    }
-
-    tx.commit().await.map_err(|e| e.to_string())?;
     if let Some(app) = app_handle {
         emit_db_update(app, "rooms");
     }

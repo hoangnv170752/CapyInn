@@ -9,7 +9,7 @@ use super::{
     billing_service::{
         record_cancellation_fee_tx, record_deposit_tx, record_payment, record_payment_tx,
     },
-    stay_lifecycle,
+    reservation_lifecycle, stay_lifecycle,
 };
 
 pub async fn test_pool() -> Pool<Sqlite> {
@@ -591,6 +591,101 @@ async fn calculate_stay_price_tx_reads_uncommitted_pricing_rule() {
     assert_eq!(pricing.total, 1_200_000.0);
 
     tx.rollback().await.unwrap();
+}
+
+#[tokio::test]
+async fn create_reservation_blocks_calendar_and_posts_deposit() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R160").await.unwrap();
+    seed_pricing_rule(&pool, "standard", 600_000.0)
+        .await
+        .unwrap();
+
+    let booking =
+        reservation_lifecycle::create_reservation(&pool, minimal_reservation_request("R160"))
+            .await
+            .unwrap();
+
+    assert_eq!(booking.room_id, "R160");
+    assert_eq!(booking.status, "booked");
+    assert_eq!(booking.total_price, 1_200_000.0);
+    assert_eq!(booking.paid_amount, 50_000.0);
+
+    let calendar_days: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM room_calendar WHERE booking_id = ? AND status = 'booked'",
+    )
+    .bind(&booking.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(calendar_days.0, 2);
+
+    let deposit = sqlx::query(
+        "SELECT type, amount, note FROM transactions WHERE booking_id = ? AND type = 'deposit' LIMIT 1",
+    )
+    .bind(&booking.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(deposit.get::<String, _>("type"), "deposit");
+    assert_eq!(deposit.get::<f64, _>("amount"), 50_000.0);
+    assert_eq!(deposit.get::<String, _>("note"), "Reservation deposit");
+}
+
+#[tokio::test]
+async fn cancel_reservation_releases_calendar_and_keeps_fee_record() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R161").await.unwrap();
+    seed_booked_reservation(&pool, "B161", "R161")
+        .await
+        .unwrap();
+
+    sqlx::query("UPDATE rooms SET status = 'booked' WHERE id = ?")
+        .bind("R161")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    reservation_lifecycle::cancel_reservation(&pool, "B161")
+        .await
+        .unwrap();
+
+    let booking = sqlx::query("SELECT status, paid_amount FROM bookings WHERE id = ?")
+        .bind("B161")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(booking.get::<String, _>("status"), "cancelled");
+    assert_eq!(booking.get::<Option<f64>, _>("paid_amount"), Some(50_000.0));
+
+    let remaining_calendar: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM room_calendar WHERE booking_id = ?")
+            .bind("B161")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining_calendar.0, 0);
+
+    let room = sqlx::query("SELECT status FROM rooms WHERE id = ?")
+        .bind("R161")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(room.get::<String, _>("status"), "vacant");
+
+    let fee = sqlx::query(
+        "SELECT type, amount, note FROM transactions WHERE booking_id = ? AND type = 'cancellation_fee' LIMIT 1",
+    )
+    .bind("B161")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(fee.get::<String, _>("type"), "cancellation_fee");
+    assert_eq!(fee.get::<f64, _>("amount"), 50_000.0);
+    assert_eq!(
+        fee.get::<String, _>("note"),
+        "Deposit retained (cancellation)"
+    );
 }
 
 #[tokio::test]
