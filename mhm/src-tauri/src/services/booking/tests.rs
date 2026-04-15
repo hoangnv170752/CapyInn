@@ -1,6 +1,7 @@
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Row, Sqlite, Transaction};
 
 use crate::{
+    commands::reservations,
     domain::booking::{pricing::calculate_stay_price_tx, BookingResult},
     models::{CheckInRequest, CheckOutRequest, CreateGuestRequest, CreateReservationRequest},
 };
@@ -620,6 +621,13 @@ async fn create_reservation_blocks_calendar_and_posts_deposit() {
     .unwrap();
     assert_eq!(calendar_days.0, 2);
 
+    let room = sqlx::query("SELECT status FROM rooms WHERE id = ?")
+        .bind("R160")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(room.get::<String, _>("status"), "vacant");
+
     let deposit = sqlx::query(
         "SELECT type, amount, note FROM transactions WHERE booking_id = ? AND type = 'deposit' LIMIT 1",
     )
@@ -686,6 +694,76 @@ async fn cancel_reservation_releases_calendar_and_keeps_fee_record() {
         fee.get::<String, _>("note"),
         "Deposit retained (cancellation)"
     );
+}
+
+#[tokio::test]
+async fn do_create_reservation_returns_service_booking_and_leaves_room_vacant() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R162").await.unwrap();
+    seed_pricing_rule(&pool, "standard", 600_000.0)
+        .await
+        .unwrap();
+
+    let booking = reservations::do_create_reservation(
+        &pool,
+        None,
+        minimal_reservation_request("R162"),
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(booking.room_id, "R162");
+    assert_eq!(booking.status, "booked");
+    assert_eq!(booking.total_price, 1_200_000.0);
+    assert_eq!(booking.paid_amount, 50_000.0);
+
+    let room = sqlx::query("SELECT status FROM rooms WHERE id = ?")
+        .bind("R162")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(room.get::<String, _>("status"), "vacant");
+
+    let calendar_days: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM room_calendar WHERE booking_id = ? AND status = 'booked'",
+    )
+    .bind(&booking.id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(calendar_days.0, 2);
+}
+
+#[tokio::test]
+async fn do_cancel_reservation_cleans_legacy_booked_room_state() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R163").await.unwrap();
+    seed_booked_reservation(&pool, "B163", "R163").await.unwrap();
+
+    sqlx::query("UPDATE rooms SET status = 'booked' WHERE id = ?")
+        .bind("R163")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    reservations::do_cancel_reservation(&pool, None, "B163")
+        .await
+        .unwrap();
+
+    let room = sqlx::query("SELECT status FROM rooms WHERE id = ?")
+        .bind("R163")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(room.get::<String, _>("status"), "vacant");
+
+    let remaining_calendar: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM room_calendar WHERE booking_id = ?")
+            .bind("B163")
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(remaining_calendar.0, 0);
 }
 
 #[tokio::test]

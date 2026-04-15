@@ -71,21 +71,7 @@ pub async fn do_create_reservation(
         emit_db_update(app, "rooms");
     }
 
-    Ok(Booking {
-        id: booking_id,
-        room_id: req.room_id,
-        primary_guest_id: guest_id,
-        check_in_at: req.check_in_date,
-        expected_checkout: req.check_out_date,
-        actual_checkout: None,
-        nights: req.nights,
-        total_price,
-        paid_amount: deposit,
-        status: "booked".to_string(),
-        source: req.source,
-        notes: req.notes,
-        created_at: now.to_rfc3339(),
-    })
+    Ok(booking)
 }
 
 #[tauri::command]
