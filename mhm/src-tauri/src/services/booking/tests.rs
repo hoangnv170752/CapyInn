@@ -1,4 +1,4 @@
-use sqlx::{sqlite::SqlitePoolOptions, Pool, Row, Sqlite};
+use sqlx::{sqlite::SqlitePoolOptions, Pool, Row, Sqlite, Transaction};
 
 use crate::{
     domain::booking::{pricing::calculate_stay_price_tx, BookingResult},
@@ -222,6 +222,32 @@ pub async fn seed_pricing_rule(
     .bind(now)
     .bind(now)
     .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn seed_pricing_rule_tx(
+    tx: &mut Transaction<'_, Sqlite>,
+    room_type: &str,
+    daily_rate: f64,
+) -> BookingResult<()> {
+    let now = "2026-04-15T10:00:00+07:00";
+
+    sqlx::query(
+        "INSERT INTO pricing_rules (
+            id, room_type, hourly_rate, overnight_rate, daily_rate,
+            overnight_start, overnight_end, daily_checkin, daily_checkout,
+            early_checkin_surcharge_pct, late_checkout_surcharge_pct,
+            weekend_uplift_pct, created_at, updated_at
+        ) VALUES (?, ?, 0, 0, ?, '22:00', '11:00', '14:00', '12:00', 0, 0, 0, ?, ?)",
+    )
+    .bind(format!("rule-{}", room_type))
+    .bind(room_type)
+    .bind(daily_rate)
+    .bind(now)
+    .bind(now)
+    .execute(&mut **tx)
     .await?;
 
     Ok(())
@@ -547,9 +573,11 @@ async fn record_cancellation_fee_tx_does_not_change_paid_amount() {
 async fn calculate_stay_price_tx_reads_uncommitted_pricing_rule() {
     let pool = test_pool().await;
     seed_room(&pool, "R150").await.unwrap();
-    seed_pricing_rule(&pool, "standard", 600_000.0).await.unwrap();
-
     let mut tx = pool.begin().await.unwrap();
+    seed_pricing_rule_tx(&mut tx, "standard", 600_000.0)
+        .await
+        .unwrap();
+
     let pricing = calculate_stay_price_tx(
         &mut tx,
         "R150",
