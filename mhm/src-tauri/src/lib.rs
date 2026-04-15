@@ -2,10 +2,12 @@ use tauri::Manager;
 
 mod commands;
 mod db;
+mod domain;
 pub mod gateway;
 mod models;
 mod ocr;
 mod pricing;
+mod services;
 mod watcher;
 
 use commands::AppState;
