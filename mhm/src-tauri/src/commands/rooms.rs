@@ -1,6 +1,6 @@
 use sqlx::{Pool, Sqlite, Row};
 use tauri::State;
-use crate::models::*;
+use crate::{models::*, services::booking::stay_lifecycle};
 use super::{AppState, get_f64, emit_db_update, get_user_id};
 
 // ─── Room Commands ───
@@ -69,196 +69,13 @@ pub async fn get_dashboard_stats(state: State<'_, AppState>) -> Result<Dashboard
 
 #[tauri::command]
 pub async fn check_in(state: State<'_, AppState>, app: tauri::AppHandle, req: CheckInRequest) -> Result<Booking, String> {
-    // Input validation
-    if req.guests.is_empty() {
-        return Err("Phải có ít nhất 1 khách".to_string());
-    }
-    if req.nights <= 0 {
-        return Err("Number of nights must be greater than 0".to_string());
-    }
-
-    let user_id = get_user_id(&state);
-
-    // Start transaction — all DB operations are atomic
-    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
-
-    let room_status: (String,) = sqlx::query_as("SELECT status FROM rooms WHERE id = ?")
-        .bind(&req.room_id)
-        .fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    if room_status.0 != "vacant" {
-        return Err(format!("Phòng {} không trống (status: {})", req.room_id, room_status.0));
-    }
-
-    // ── Calendar overlap check (overbooking prevention) ──
-    let now = chrono::Local::now();
-    let checkin_date = now.format("%Y-%m-%d").to_string();
-    let checkout = now + chrono::Duration::days(req.nights as i64);
-    let checkout_date = checkout.format("%Y-%m-%d").to_string();
-
-    let conflicts = sqlx::query(
-        "SELECT rc.date, rc.status, rc.booking_id, COALESCE(g.full_name, '') as guest_name
-         FROM room_calendar rc
-         LEFT JOIN bookings b ON b.id = rc.booking_id
-         LEFT JOIN guests g ON g.id = b.primary_guest_id
-         WHERE rc.room_id = ? AND rc.date >= ? AND rc.date < ?
-         ORDER BY rc.date ASC"
-    )
-    .bind(&req.room_id).bind(&checkin_date).bind(&checkout_date)
-    .fetch_all(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    if !conflicts.is_empty() {
-        let first_date: String = conflicts[0].get("date");
-        let guest: String = conflicts[0].get("guest_name");
-        // Calculate max nights until first conflict
-        let first_conflict = chrono::NaiveDate::parse_from_str(&first_date, "%Y-%m-%d")
-            .map_err(|e| e.to_string())?;
-        let today = now.date_naive();
-        let max_nights = (first_conflict - today).num_days();
-        return Err(format!(
-            "Room {} has a reservation starting {} ({}). Max {} nights.",
-            req.room_id, first_date, guest, max_nights
-        ));
-    }
-
-    let price_row = sqlx::query("SELECT base_price FROM rooms WHERE id = ?")
-        .bind(&req.room_id)
-        .fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
-    let room_price = get_f64(&price_row, "base_price");
-
-    let total_price = room_price * req.nights as f64;
-    let paid = req.paid_amount.unwrap_or(0.0);
-
-    // Create primary guest
-    let primary_guest_id = uuid::Uuid::new_v4().to_string();
-    let primary = &req.guests[0];
-
-    sqlx::query(
-        "INSERT INTO guests (id, guest_type, full_name, doc_number, dob, gender, nationality, address, visa_expiry, scan_path, phone, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-    )
-    .bind(&primary_guest_id)
-    .bind(primary.guest_type.as_deref().unwrap_or("domestic"))
-    .bind(&primary.full_name)
-    .bind(&primary.doc_number)
-    .bind(&primary.dob)
-    .bind(&primary.gender)
-    .bind(&primary.nationality)
-    .bind(&primary.address)
-    .bind(&primary.visa_expiry)
-    .bind(&primary.scan_path)
-    .bind(&primary.phone)
-    .bind(now.to_rfc3339())
-    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    // Create booking
-    let booking_id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO bookings (id, room_id, primary_guest_id, check_in_at, expected_checkout, nights, total_price, paid_amount, status, source, notes, created_by, booking_type, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, 'walk-in', ?)"
-    )
-    .bind(&booking_id)
-    .bind(&req.room_id)
-    .bind(&primary_guest_id)
-    .bind(now.to_rfc3339())
-    .bind(checkout.to_rfc3339())
-    .bind(req.nights)
-    .bind(total_price)
-    .bind(paid)
-    .bind(req.source.as_deref().unwrap_or("walk-in"))
-    .bind(&req.notes)
-    .bind(&user_id)
-    .bind(now.to_rfc3339())
-    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    // Link primary guest
-    sqlx::query("INSERT INTO booking_guests (booking_id, guest_id) VALUES (?, ?)")
-        .bind(&booking_id).bind(&primary_guest_id)
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    // Add additional guests
-    for guest_req in req.guests.iter().skip(1) {
-        let guest_id = uuid::Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO guests (id, guest_type, full_name, doc_number, dob, gender, nationality, address, visa_expiry, scan_path, phone, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
-        )
-        .bind(&guest_id)
-        .bind(guest_req.guest_type.as_deref().unwrap_or("domestic"))
-        .bind(&guest_req.full_name)
-        .bind(&guest_req.doc_number)
-        .bind(&guest_req.dob)
-        .bind(&guest_req.gender)
-        .bind(&guest_req.nationality)
-        .bind(&guest_req.address)
-        .bind(&guest_req.visa_expiry)
-        .bind(&guest_req.scan_path)
-        .bind(&guest_req.phone)
-        .bind(now.to_rfc3339())
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-        sqlx::query("INSERT INTO booking_guests (booking_id, guest_id) VALUES (?, ?)")
-            .bind(&booking_id).bind(&guest_id)
-            .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-    }
-
-    // Always record charge transaction for room revenue
-    let charge_id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO transactions (id, booking_id, amount, type, note, created_at)
-         VALUES (?, ?, ?, 'charge', 'Tiền phòng', ?)"
-    )
-    .bind(&charge_id).bind(&booking_id).bind(total_price).bind(now.to_rfc3339())
-    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    // Record payment if any
-    if paid > 0.0 {
-        let txn_id = uuid::Uuid::new_v4().to_string();
-        sqlx::query(
-            "INSERT INTO transactions (id, booking_id, amount, type, note, created_at)
-             VALUES (?, ?, ?, 'payment', 'Thanh toán khi check-in', ?)"
-        )
-        .bind(&txn_id).bind(&booking_id).bind(paid).bind(now.to_rfc3339())
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-    }
-
-    // Insert calendar rows for each day of the stay (occupied)
-    let mut d = now.date_naive();
-    let checkout_naive = checkout.date_naive();
-    while d < checkout_naive {
-        sqlx::query(
-            "INSERT OR REPLACE INTO room_calendar (room_id, date, booking_id, status) VALUES (?, ?, ?, 'occupied')"
-        )
-        .bind(&req.room_id).bind(d.format("%Y-%m-%d").to_string()).bind(&booking_id)
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-        d += chrono::Duration::days(1);
-    }
-
-    // Update room status
-    sqlx::query("UPDATE rooms SET status = 'occupied' WHERE id = ?")
-        .bind(&req.room_id)
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    // Commit transaction — all-or-nothing
-    tx.commit().await.map_err(|e| e.to_string())?;
+    let booking = stay_lifecycle::check_in(&state.db, req, get_user_id(&state))
+        .await
+        .map_err(|error| error.to_string())?;
 
     emit_db_update(&app, "rooms");
 
-    Ok(Booking {
-        id: booking_id,
-        room_id: req.room_id,
-        primary_guest_id,
-        check_in_at: now.to_rfc3339(),
-        expected_checkout: checkout.to_rfc3339(),
-        actual_checkout: None,
-        nights: req.nights,
-        total_price,
-        paid_amount: paid,
-        status: "active".to_string(),
-        source: req.source,
-        notes: req.notes,
-        created_at: now.to_rfc3339(),
-    })
+    Ok(booking)
 }
 
 // ─── Room Detail Command ───
@@ -341,66 +158,9 @@ pub async fn get_room_detail(state: State<'_, AppState>, room_id: String) -> Res
 
 #[tauri::command]
 pub async fn check_out(state: State<'_, AppState>, app: tauri::AppHandle, req: CheckOutRequest) -> Result<(), String> {
-    let now = chrono::Local::now();
-
-    // Start transaction
-    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
-
-    // Get booking
-    let row = sqlx::query("SELECT room_id, total_price, paid_amount FROM bookings WHERE id = ? AND status = 'active'")
-        .bind(&req.booking_id)
-        .fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    let room_id: String = row.get("room_id");
-    let _total: f64 = get_f64(&row, "total_price");
-    let already_paid: f64 = get_f64(&row, "paid_amount");
-
-    // Record final payment if provided
-    if let Some(final_paid) = req.final_paid {
-        let additional = final_paid - already_paid;
-        if additional > 0.0 {
-            let txn_id = uuid::Uuid::new_v4().to_string();
-            sqlx::query(
-                "INSERT INTO transactions (id, booking_id, amount, type, note, created_at)
-                 VALUES (?, ?, ?, 'payment', 'Thanh toán khi check-out', ?)"
-            )
-            .bind(&txn_id).bind(&req.booking_id).bind(additional).bind(now.to_rfc3339())
-            .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-            sqlx::query("UPDATE bookings SET paid_amount = ? WHERE id = ?")
-                .bind(final_paid).bind(&req.booking_id)
-                .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-        }
-    } else {
-        // No final_paid provided — keep existing paid_amount as-is (allow outstanding balance/debt)
-    }
-
-    // Update booking
-    sqlx::query("UPDATE bookings SET status = 'checked_out', actual_checkout = ? WHERE id = ?")
-        .bind(now.to_rfc3339()).bind(&req.booking_id)
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    // Room → cleaning
-    sqlx::query("UPDATE rooms SET status = 'cleaning' WHERE id = ?")
-        .bind(&room_id)
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    // Create housekeeping task
-    let hk_id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO housekeeping (id, room_id, status, triggered_at, created_at)
-         VALUES (?, ?, 'needs_cleaning', ?, ?)"
-    )
-    .bind(&hk_id).bind(&room_id).bind(now.to_rfc3339()).bind(now.to_rfc3339())
-    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    // Clean up calendar rows for this booking
-    sqlx::query("DELETE FROM room_calendar WHERE booking_id = ?")
-        .bind(&req.booking_id)
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    // Commit transaction
-    tx.commit().await.map_err(|e| e.to_string())?;
+    stay_lifecycle::check_out(&state.db, req)
+        .await
+        .map_err(|error| error.to_string())?;
 
     emit_db_update(&app, "rooms");
 
@@ -411,44 +171,9 @@ pub async fn check_out(state: State<'_, AppState>, app: tauri::AppHandle, req: C
 
 #[tauri::command]
 pub async fn extend_stay(state: State<'_, AppState>, booking_id: String) -> Result<Booking, String> {
-    let row = sqlx::query("SELECT * FROM bookings WHERE id = ? AND status = 'active'")
-        .bind(&booking_id)
-        .fetch_one(&state.db).await.map_err(|e| e.to_string())?;
-
-    let room_id: String = row.get("room_id");
-    let nights: i32 = row.get("nights");
-    let old_total: f64 = get_f64(&row, "total_price");
-    let expected_co: String = row.get("expected_checkout");
-
-    let price_row = sqlx::query("SELECT base_price FROM rooms WHERE id = ?")
-        .bind(&room_id)
-        .fetch_one(&state.db).await.map_err(|e| e.to_string())?;
-    let room_price = get_f64(&price_row, "base_price");
-
-    let new_nights = nights + 1;
-    let new_total = old_total + room_price;
-
-    // Parse existing expected_checkout and add 1 day (not from now)
-    let co_dt = chrono::DateTime::parse_from_rfc3339(&expected_co)
-        .map(|d| d.with_timezone(&chrono::Local))
-        .map_err(|e| format!("Cannot parse expected_checkout: {}", e))?;
-    let new_checkout = co_dt + chrono::Duration::days(1);
-
-    sqlx::query("UPDATE bookings SET nights = ?, total_price = ?, expected_checkout = ? WHERE id = ?")
-        .bind(new_nights).bind(new_total).bind(new_checkout.to_rfc3339()).bind(&booking_id)
-        .execute(&state.db).await.map_err(|e| e.to_string())?;
-
-    // Record charge for the additional night
-    let charge_id = uuid::Uuid::new_v4().to_string();
-    let now = chrono::Local::now();
-    sqlx::query(
-        "INSERT INTO transactions (id, booking_id, amount, type, note, created_at)
-         VALUES (?, ?, ?, 'charge', 'Extended stay +1 night', ?)"
-    )
-    .bind(&charge_id).bind(&booking_id).bind(room_price).bind(now.to_rfc3339())
-    .execute(&state.db).await.map_err(|e| e.to_string())?;
-
-    get_booking_by_id(&state.db, &booking_id).await
+    stay_lifecycle::extend_stay(&state.db, &booking_id)
+        .await
+        .map_err(|error| error.to_string())
 }
 
 pub(crate) async fn get_booking_by_id(pool: &Pool<Sqlite>, id: &str) -> Result<Booking, String> {

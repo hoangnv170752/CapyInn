@@ -208,6 +208,7 @@ pub struct CheckInRequest {
     pub source: Option<String>,
     pub notes: Option<String>,
     pub paid_amount: Option<f64>,
+    pub pricing_type: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
