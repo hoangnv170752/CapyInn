@@ -224,7 +224,7 @@ pub async fn confirm_reservation(pool: &Pool<Sqlite>, booking_id: &str) -> Booki
     )
     .bind(status::booking::ACTIVE)
     .bind(&check_in_at)
-    .bind(&reservation.scheduled_checkout)
+    .bind(&effective_checkout)
     .bind(actual_nights)
     .bind(pricing.total)
     .bind(deposit_amount)
@@ -277,10 +277,19 @@ pub async fn modify_reservation(
     pool: &Pool<Sqlite>,
     req: ModifyReservationRequest,
 ) -> BookingResult<Booking> {
-    if req.new_nights <= 0 {
+    let requested_checkin = parse_date(&req.new_check_in_date)?;
+    let requested_checkout = parse_date(&req.new_check_out_date)?;
+    let derived_nights = (requested_checkout - requested_checkin).num_days();
+    if derived_nights <= 0 {
         return Err(BookingError::validation(
-            "Number of nights must be greater than 0".to_string(),
+            "Check-out date must be after check-in date".to_string(),
         ));
+    }
+    if req.new_nights != derived_nights as i32 {
+        return Err(BookingError::validation(format!(
+            "Number of nights must match the date range (expected {})",
+            derived_nights
+        )));
     }
 
     let mut tx = begin_tx(pool).await?;
@@ -327,7 +336,7 @@ pub async fn modify_reservation(
     .bind(&req.new_check_out_date)
     .bind(&req.new_check_in_date)
     .bind(&req.new_check_out_date)
-    .bind(req.new_nights)
+    .bind(derived_nights)
     .bind(pricing.total)
     .bind(&req.booking_id)
     .execute(&mut *tx)

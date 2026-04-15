@@ -883,15 +883,68 @@ async fn confirm_reservation_rejects_no_show_calendar_rows() {
         .await
         .unwrap_err();
 
-    assert!(
-        matches!(
-            &error,
-            crate::domain::booking::BookingError::Conflict(_)
-                | crate::domain::booking::BookingError::NotFound(_)
-        ),
-        "unexpected error: {error:?}"
-    );
+    assert!(matches!(
+        &error,
+        crate::domain::booking::BookingError::Conflict(_)
+    ));
     assert!(error.to_string().contains("B165"));
+}
+
+#[tokio::test]
+async fn confirm_reservation_late_arrival_persists_effective_checkout() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R165A").await.unwrap();
+    seed_pricing_rule(&pool, "standard", 600_000.0)
+        .await
+        .unwrap();
+    seed_booked_reservation(&pool, "B165A", "R165A").await.unwrap();
+
+    let today = Local::now().date_naive();
+    let scheduled_checkin = today - Duration::days(2);
+    let scheduled_checkout = today;
+    let scheduled_checkin_str = scheduled_checkin.format("%Y-%m-%d").to_string();
+    let scheduled_checkout_str = scheduled_checkout.format("%Y-%m-%d").to_string();
+    let effective_checkout_str = (today + Duration::days(1)).format("%Y-%m-%d").to_string();
+
+    sqlx::query(
+        "UPDATE bookings
+         SET check_in_at = ?, expected_checkout = ?, scheduled_checkin = ?, scheduled_checkout = ?, nights = ?, total_price = ?
+         WHERE id = ?",
+    )
+    .bind(&scheduled_checkin_str)
+    .bind(&scheduled_checkout_str)
+    .bind(&scheduled_checkin_str)
+    .bind(&scheduled_checkout_str)
+    .bind(2_i64)
+    .bind(1_200_000.0_f64)
+    .bind("B165A")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query("DELETE FROM room_calendar WHERE booking_id = ?")
+        .bind("B165A")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let booking = reservation_lifecycle::confirm_reservation(&pool, "B165A")
+        .await
+        .unwrap();
+
+    assert_eq!(booking.status, "active");
+    assert_eq!(booking.nights, 1);
+    assert_eq!(booking.expected_checkout, effective_checkout_str);
+    assert_eq!(booking.total_price, 600_000.0);
+
+    let calendar_rows = sqlx::query(
+        "SELECT date, status FROM room_calendar WHERE booking_id = ? ORDER BY date ASC",
+    )
+    .bind("B165A")
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    assert_eq!(calendar_rows.len(), 0);
 }
 
 #[tokio::test]
@@ -955,6 +1008,33 @@ async fn modify_reservation_rewrites_booked_calendar_range() {
         ]
     );
     assert!(actual_statuses.iter().all(|status| status == "booked"));
+}
+
+#[tokio::test]
+async fn modify_reservation_rejects_inconsistent_nights_input() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R166A").await.unwrap();
+    seed_pricing_rule(&pool, "standard", 600_000.0)
+        .await
+        .unwrap();
+    seed_booked_reservation(&pool, "B166A", "R166A").await.unwrap();
+
+    let error = reservation_lifecycle::modify_reservation(
+        &pool,
+        crate::models::ModifyReservationRequest {
+            booking_id: "B166A".to_string(),
+            new_check_in_date: "2026-04-23".to_string(),
+            new_check_out_date: "2026-04-26".to_string(),
+            new_nights: 2,
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        crate::domain::booking::BookingError::Validation(_)
+    ));
 }
 
 #[tokio::test]
