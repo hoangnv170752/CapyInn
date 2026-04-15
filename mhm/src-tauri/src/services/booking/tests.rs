@@ -302,6 +302,8 @@ pub async fn seed_booked_reservation(
     let deposit = 50_000.0_f64;
     let total_price = 500_000.0_f64;
 
+    let mut tx = pool.begin().await?;
+
     sqlx::query(
         "INSERT INTO guests (
             id, guest_type, full_name, doc_number, dob, gender, nationality,
@@ -313,7 +315,7 @@ pub async fn seed_booked_reservation(
     .bind(format!("DOC-{}", booking_id))
     .bind(phone)
     .bind(now)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query(
@@ -340,18 +342,13 @@ pub async fn seed_booked_reservation(
     .bind(check_in)
     .bind(check_out)
     .bind(now)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query("INSERT INTO booking_guests (booking_id, guest_id) VALUES (?, ?)")
         .bind(booking_id)
         .bind(&guest_id)
-        .execute(pool)
-        .await?;
-
-    sqlx::query("UPDATE rooms SET status = 'booked' WHERE id = ?")
-        .bind(room_id)
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
     sqlx::query(
@@ -359,7 +356,7 @@ pub async fn seed_booked_reservation(
     )
     .bind(room_id)
     .bind(booking_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
 
     sqlx::query(
@@ -367,8 +364,24 @@ pub async fn seed_booked_reservation(
     )
     .bind(room_id)
     .bind(booking_id)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+
+    if deposit > 0.0 {
+        sqlx::query(
+            "INSERT INTO transactions (id, booking_id, amount, type, note, created_at)
+             VALUES (?, ?, ?, 'deposit', ?, ?)",
+        )
+        .bind(uuid::Uuid::new_v4().to_string())
+        .bind(booking_id)
+        .bind(deposit)
+        .bind("Reservation deposit")
+        .bind(now)
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    tx.commit().await?;
 
     Ok(())
 }
@@ -534,27 +547,9 @@ async fn record_cancellation_fee_tx_does_not_change_paid_amount() {
 async fn calculate_stay_price_tx_reads_uncommitted_pricing_rule() {
     let pool = test_pool().await;
     seed_room(&pool, "R150").await.unwrap();
+    seed_pricing_rule(&pool, "standard", 600_000.0).await.unwrap();
 
     let mut tx = pool.begin().await.unwrap();
-    sqlx::query(
-        "INSERT INTO pricing_rules (
-            id, room_type, hourly_rate, overnight_rate, daily_rate,
-            overnight_start, overnight_end, daily_checkin, daily_checkout,
-            early_checkin_surcharge_pct, late_checkout_surcharge_pct,
-            weekend_uplift_pct, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, '22:00', '11:00', '14:00', '12:00', 0, 0, 0, ?, ?)",
-    )
-    .bind("rule-standard")
-    .bind("standard")
-    .bind(50_000.0_f64)
-    .bind(150_000.0_f64)
-    .bind(600_000.0_f64)
-    .bind("2026-04-15T10:00:00+07:00")
-    .bind("2026-04-15T10:00:00+07:00")
-    .execute(&mut *tx)
-    .await
-    .unwrap();
-
     let pricing = calculate_stay_price_tx(
         &mut tx,
         "R150",
