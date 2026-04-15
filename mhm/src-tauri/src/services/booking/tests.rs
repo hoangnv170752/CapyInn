@@ -642,6 +642,38 @@ async fn create_reservation_blocks_calendar_and_posts_deposit() {
 }
 
 #[tokio::test]
+async fn create_reservation_rejects_inconsistent_nights_input() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R160A").await.unwrap();
+    seed_pricing_rule(&pool, "standard", 600_000.0)
+        .await
+        .unwrap();
+
+    let error = reservation_lifecycle::create_reservation(
+        &pool,
+        CreateReservationRequest {
+            room_id: "R160A".to_string(),
+            guest_name: "Nguyen Van B".to_string(),
+            guest_phone: Some("0900000001".to_string()),
+            guest_doc_number: Some("079000000001".to_string()),
+            check_in_date: "2026-04-20".to_string(),
+            check_out_date: "2026-04-22".to_string(),
+            nights: 3,
+            deposit_amount: Some(50_000.0),
+            source: Some("phone".to_string()),
+            notes: Some("test reservation".to_string()),
+        },
+    )
+    .await
+    .unwrap_err();
+
+    assert!(matches!(
+        error,
+        crate::domain::booking::BookingError::Validation(_)
+    ));
+}
+
+#[tokio::test]
 async fn cancel_reservation_releases_calendar_and_keeps_fee_record() {
     let pool = test_pool().await;
     seed_room(&pool, "R161").await.unwrap();
@@ -944,7 +976,45 @@ async fn confirm_reservation_late_arrival_persists_effective_checkout() {
     .fetch_all(&pool)
     .await
     .unwrap();
-    assert_eq!(calendar_rows.len(), 0);
+    assert_eq!(calendar_rows.len(), 1);
+    assert_eq!(calendar_rows[0].get::<String, _>("date"), today.format("%Y-%m-%d").to_string());
+    assert_eq!(calendar_rows[0].get::<String, _>("status"), "occupied");
+}
+
+#[tokio::test]
+async fn confirm_reservation_preserves_extra_precheckin_payment() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R165B").await.unwrap();
+    seed_pricing_rule(&pool, "standard", 600_000.0)
+        .await
+        .unwrap();
+    seed_booked_reservation(&pool, "B165B", "R165B").await.unwrap();
+
+    sqlx::query(
+        "INSERT INTO transactions (id, booking_id, amount, type, note, created_at)
+         VALUES (?, ?, ?, 'payment', ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind("B165B")
+    .bind(25_000.0_f64)
+    .bind("Extra pre-check-in payment")
+    .bind("2026-04-15T10:00:00+07:00")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query("UPDATE bookings SET paid_amount = ? WHERE id = ?")
+        .bind(75_000.0_f64)
+        .bind("B165B")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let booking = reservation_lifecycle::confirm_reservation(&pool, "B165B")
+        .await
+        .unwrap();
+
+    assert_eq!(booking.paid_amount, 75_000.0);
 }
 
 #[tokio::test]

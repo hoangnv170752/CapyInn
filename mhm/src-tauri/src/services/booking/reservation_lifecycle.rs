@@ -15,11 +15,8 @@ pub async fn create_reservation(
     pool: &Pool<Sqlite>,
     req: CreateReservationRequest,
 ) -> BookingResult<Booking> {
-    if req.nights <= 0 {
-        return Err(BookingError::validation(
-            "Number of nights must be greater than 0".to_string(),
-        ));
-    }
+    let derived_nights =
+        validate_requested_nights(&req.check_in_date, &req.check_out_date, req.nights)?;
 
     let mut tx = begin_tx(pool).await?;
 
@@ -78,7 +75,7 @@ pub async fn create_reservation(
     .bind(&guest_id)
     .bind(&req.check_in_date)
     .bind(&req.check_out_date)
-    .bind(req.nights)
+    .bind(derived_nights)
     .bind(pricing.total)
     .bind(status::booking::BOOKED)
     .bind(req.source.as_deref().unwrap_or("phone"))
@@ -195,27 +192,38 @@ pub async fn confirm_reservation(pool: &Pool<Sqlite>, booking_id: &str) -> Booki
 
     let now = Local::now();
     let today = now.date_naive();
-    let today_str = today.format("%Y-%m-%d").to_string();
-    let scheduled_checkin = parse_date(&reservation.scheduled_checkin)?;
     let scheduled_checkout = parse_date(&reservation.scheduled_checkout)?;
-    let effective_checkout = if scheduled_checkout <= today {
-        (today + chrono::Duration::days(1))
-            .format("%Y-%m-%d")
-            .to_string()
+    let effective_checkout_date = if scheduled_checkout <= today {
+        today + chrono::Duration::days(1)
     } else {
-        reservation.scheduled_checkout.clone()
+        scheduled_checkout
     };
+    let effective_checkout = effective_checkout_date.format("%Y-%m-%d").to_string();
     let pricing = calculate_stay_price_tx(
         &mut tx,
         &reservation.room_id,
-        &today_str,
+        &today.format("%Y-%m-%d").to_string(),
         &effective_checkout,
         &reservation.pricing_type,
     )
     .await?;
-    let actual_nights = (scheduled_checkout - today).num_days().max(1) as i32;
-    let deposit_amount = reservation.deposit_amount.unwrap_or(0.0);
+    let actual_nights = (effective_checkout_date - today).num_days() as i32;
     let check_in_at = now.to_rfc3339();
+
+    sqlx::query("DELETE FROM room_calendar WHERE booking_id = ?")
+        .bind(booking_id)
+        .execute(&mut *tx)
+        .await?;
+
+    insert_calendar_rows(
+        &mut tx,
+        &reservation.room_id,
+        booking_id,
+        today,
+        effective_checkout_date,
+        status::calendar::OCCUPIED,
+    )
+    .await?;
 
     sqlx::query(
         "UPDATE bookings
@@ -227,29 +235,8 @@ pub async fn confirm_reservation(pool: &Pool<Sqlite>, booking_id: &str) -> Booki
     .bind(&effective_checkout)
     .bind(actual_nights)
     .bind(pricing.total)
-    .bind(deposit_amount)
+    .bind(reservation.paid_amount)
     .bind(booking_id)
-    .execute(&mut *tx)
-    .await?;
-
-    if today < scheduled_checkin {
-        insert_calendar_rows(
-            &mut tx,
-            &reservation.room_id,
-            booking_id,
-            today,
-            scheduled_checkin,
-            status::calendar::OCCUPIED,
-        )
-        .await?;
-    }
-
-    sqlx::query(
-        "UPDATE room_calendar SET status = ? WHERE booking_id = ? AND status = ?",
-    )
-    .bind(status::calendar::OCCUPIED)
-    .bind(booking_id)
-    .bind(status::calendar::BOOKED)
     .execute(&mut *tx)
     .await?;
 
@@ -277,20 +264,9 @@ pub async fn modify_reservation(
     pool: &Pool<Sqlite>,
     req: ModifyReservationRequest,
 ) -> BookingResult<Booking> {
-    let requested_checkin = parse_date(&req.new_check_in_date)?;
-    let requested_checkout = parse_date(&req.new_check_out_date)?;
-    let derived_nights = (requested_checkout - requested_checkin).num_days();
-    if derived_nights <= 0 {
-        return Err(BookingError::validation(
-            "Check-out date must be after check-in date".to_string(),
-        ));
-    }
-    if req.new_nights != derived_nights as i32 {
-        return Err(BookingError::validation(format!(
-            "Number of nights must match the date range (expected {})",
-            derived_nights
-        )));
-    }
+    let derived_nights =
+        validate_requested_nights(&req.new_check_in_date, &req.new_check_out_date, req.new_nights)?
+            as i64;
 
     let mut tx = begin_tx(pool).await?;
     let reservation = load_booked_reservation(&mut tx, &req.booking_id).await?;
@@ -356,6 +332,29 @@ pub async fn modify_reservation(
     fetch_booking(pool, &req.booking_id).await
 }
 
+fn validate_requested_nights(
+    check_in_date: &str,
+    check_out_date: &str,
+    requested_nights: i32,
+) -> BookingResult<i32> {
+    let check_in = parse_date(check_in_date)?;
+    let check_out = parse_date(check_out_date)?;
+    let derived_nights = (check_out - check_in).num_days();
+    if derived_nights <= 0 {
+        return Err(BookingError::validation(
+            "Check-out date must be after check-in date".to_string(),
+        ));
+    }
+    if requested_nights != derived_nights as i32 {
+        return Err(BookingError::validation(format!(
+            "Number of nights must match the date range (expected {})",
+            derived_nights
+        )));
+    }
+
+    Ok(derived_nights as i32)
+}
+
 async fn insert_booked_calendar_rows(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     room_id: &str,
@@ -406,7 +405,7 @@ async fn load_booked_reservation(
     booking_id: &str,
 ) -> BookingResult<BookedReservation> {
     let row = sqlx::query(
-        "SELECT room_id, status, deposit_amount, scheduled_checkin, scheduled_checkout, pricing_type
+        "SELECT room_id, status, paid_amount, scheduled_checkout, pricing_type
          FROM bookings
          WHERE id = ?",
     )
@@ -424,11 +423,6 @@ async fn load_booked_reservation(
         )));
     }
 
-    let scheduled_checkin = row
-        .get::<Option<String>, _>("scheduled_checkin")
-        .ok_or_else(|| {
-            BookingError::not_found(format!("Missing scheduled check-in for {}", booking_id))
-        })?;
     let scheduled_checkout = row
         .get::<Option<String>, _>("scheduled_checkout")
         .ok_or_else(|| {
@@ -437,8 +431,9 @@ async fn load_booked_reservation(
 
     Ok(BookedReservation {
         room_id: row.get("room_id"),
-        deposit_amount: row.get("deposit_amount"),
-        scheduled_checkin,
+        paid_amount: row
+            .get::<Option<f64>, _>("paid_amount")
+            .unwrap_or(0.0),
         scheduled_checkout,
         pricing_type: row
             .get::<Option<String>, _>("pricing_type")
@@ -470,8 +465,7 @@ async fn reject_no_show_confirmation(
 
 struct BookedReservation {
     room_id: String,
-    deposit_amount: Option<f64>,
-    scheduled_checkin: String,
+    paid_amount: f64,
     scheduled_checkout: String,
     pricing_type: String,
 }
