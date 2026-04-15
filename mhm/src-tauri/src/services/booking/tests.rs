@@ -1,3 +1,4 @@
+use chrono::{Duration, Local};
 use sqlx::{sqlite::SqlitePoolOptions, Pool, Row, Sqlite, Transaction};
 
 use crate::{
@@ -764,6 +765,234 @@ async fn do_cancel_reservation_cleans_legacy_booked_room_state() {
             .await
             .unwrap();
     assert_eq!(remaining_calendar.0, 0);
+}
+
+#[tokio::test]
+async fn confirm_reservation_reprices_and_marks_room_occupied() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R164").await.unwrap();
+    seed_pricing_rule(&pool, "standard", 600_000.0)
+        .await
+        .unwrap();
+    seed_booked_reservation(&pool, "B164", "R164").await.unwrap();
+
+    let today = Local::now().date_naive();
+    let scheduled_checkin = today + Duration::days(2);
+    let scheduled_checkout = today + Duration::days(5);
+    let scheduled_checkin_str = scheduled_checkin.format("%Y-%m-%d").to_string();
+    let scheduled_checkout_str = scheduled_checkout.format("%Y-%m-%d").to_string();
+
+    sqlx::query(
+        "UPDATE bookings
+         SET check_in_at = ?, expected_checkout = ?, scheduled_checkin = ?, scheduled_checkout = ?, nights = ?, total_price = ?
+         WHERE id = ?",
+    )
+    .bind(&scheduled_checkin_str)
+    .bind(&scheduled_checkout_str)
+    .bind(&scheduled_checkin_str)
+    .bind(&scheduled_checkout_str)
+    .bind(3_i64)
+    .bind(1_800_000.0_f64)
+    .bind("B164")
+    .execute(&pool)
+    .await
+    .unwrap();
+
+    sqlx::query("DELETE FROM room_calendar WHERE booking_id = ?")
+        .bind("B164")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let mut date = scheduled_checkin;
+    while date < scheduled_checkout {
+        sqlx::query(
+            "INSERT INTO room_calendar (room_id, date, booking_id, status) VALUES (?, ?, ?, 'booked')",
+        )
+        .bind("R164")
+        .bind(date.format("%Y-%m-%d").to_string())
+        .bind("B164")
+        .execute(&pool)
+        .await
+        .unwrap();
+        date += Duration::days(1);
+    }
+
+    let booking = reservation_lifecycle::confirm_reservation(&pool, "B164")
+        .await
+        .unwrap();
+
+    assert_eq!(booking.status, "active");
+    assert_eq!(booking.paid_amount, 50_000.0);
+    assert_eq!(booking.expected_checkout, scheduled_checkout_str);
+    assert_eq!(booking.nights, 5);
+    assert_eq!(booking.total_price, 3_000_000.0);
+    assert!(booking.check_in_at.contains('T'));
+
+    let room = sqlx::query("SELECT status FROM rooms WHERE id = ?")
+        .bind("R164")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(room.get::<String, _>("status"), "occupied");
+
+    let calendar_rows = sqlx::query(
+        "SELECT date, status FROM room_calendar WHERE booking_id = ? ORDER BY date ASC",
+    )
+    .bind("B164")
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let actual_dates: Vec<String> = calendar_rows.iter().map(|row| row.get("date")).collect();
+    let actual_statuses: Vec<String> = calendar_rows.iter().map(|row| row.get("status")).collect();
+    let expected_dates: Vec<String> = (0..5)
+        .map(|offset| (today + Duration::days(offset)).format("%Y-%m-%d").to_string())
+        .collect();
+    assert_eq!(actual_dates, expected_dates);
+    assert!(actual_statuses.iter().all(|status| status == "occupied"));
+
+    let charge = sqlx::query(
+        "SELECT type, amount, note FROM transactions WHERE booking_id = ? AND type = 'charge' LIMIT 1",
+    )
+    .bind("B164")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(charge.get::<String, _>("type"), "charge");
+    assert_eq!(charge.get::<f64, _>("amount"), 3_000_000.0);
+    assert_eq!(charge.get::<String, _>("note"), "Room charge (reservation)");
+}
+
+#[tokio::test]
+async fn confirm_reservation_rejects_no_show_calendar_rows() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R165").await.unwrap();
+    seed_pricing_rule(&pool, "standard", 600_000.0)
+        .await
+        .unwrap();
+    seed_booked_reservation(&pool, "B165", "R165").await.unwrap();
+
+    sqlx::query("UPDATE room_calendar SET status = ? WHERE booking_id = ?")
+        .bind("no_show")
+        .bind("B165")
+        .execute(&pool)
+        .await
+        .unwrap();
+
+    let error = reservation_lifecycle::confirm_reservation(&pool, "B165")
+        .await
+        .unwrap_err();
+
+    assert!(
+        matches!(
+            &error,
+            crate::domain::booking::BookingError::Conflict(_)
+                | crate::domain::booking::BookingError::NotFound(_)
+        ),
+        "unexpected error: {error:?}"
+    );
+    assert!(error.to_string().contains("B165"));
+}
+
+#[tokio::test]
+async fn modify_reservation_rewrites_booked_calendar_range() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R166").await.unwrap();
+    seed_pricing_rule(&pool, "standard", 600_000.0)
+        .await
+        .unwrap();
+    seed_booked_reservation(&pool, "B166", "R166").await.unwrap();
+
+    let booking = reservation_lifecycle::modify_reservation(
+        &pool,
+        crate::models::ModifyReservationRequest {
+            booking_id: "B166".to_string(),
+            new_check_in_date: "2026-04-23".to_string(),
+            new_check_out_date: "2026-04-26".to_string(),
+            new_nights: 3,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(booking.status, "booked");
+    assert_eq!(booking.check_in_at, "2026-04-23");
+    assert_eq!(booking.expected_checkout, "2026-04-26");
+    assert_eq!(booking.nights, 3);
+    assert_eq!(booking.total_price, 1_800_000.0);
+
+    let booking_row = sqlx::query(
+        "SELECT scheduled_checkin, scheduled_checkout FROM bookings WHERE id = ?",
+    )
+    .bind("B166")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(
+        booking_row.get::<Option<String>, _>("scheduled_checkin"),
+        Some("2026-04-23".to_string())
+    );
+    assert_eq!(
+        booking_row.get::<Option<String>, _>("scheduled_checkout"),
+        Some("2026-04-26".to_string())
+    );
+
+    let calendar_rows = sqlx::query(
+        "SELECT date, status FROM room_calendar WHERE booking_id = ? ORDER BY date ASC",
+    )
+    .bind("B166")
+    .fetch_all(&pool)
+    .await
+    .unwrap();
+    let actual_dates: Vec<String> = calendar_rows.iter().map(|row| row.get("date")).collect();
+    let actual_statuses: Vec<String> = calendar_rows.iter().map(|row| row.get("status")).collect();
+    assert_eq!(
+        actual_dates,
+        vec![
+            "2026-04-23".to_string(),
+            "2026-04-24".to_string(),
+            "2026-04-25".to_string(),
+        ]
+    );
+    assert!(actual_statuses.iter().all(|status| status == "booked"));
+}
+
+#[tokio::test]
+async fn do_modify_reservation_returns_service_booking_without_app_handle() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R167").await.unwrap();
+    seed_pricing_rule(&pool, "standard", 600_000.0)
+        .await
+        .unwrap();
+    seed_booked_reservation(&pool, "B167", "R167").await.unwrap();
+
+    let booking = reservations::do_modify_reservation(
+        &pool,
+        None,
+        crate::models::ModifyReservationRequest {
+            booking_id: "B167".to_string(),
+            new_check_in_date: "2026-04-24".to_string(),
+            new_check_out_date: "2026-04-26".to_string(),
+            new_nights: 2,
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(booking.status, "booked");
+    assert_eq!(booking.check_in_at, "2026-04-24");
+    assert_eq!(booking.expected_checkout, "2026-04-26");
+    assert_eq!(booking.nights, 2);
+    assert_eq!(booking.total_price, 1_200_000.0);
+
+    let calendar_days: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM room_calendar WHERE booking_id = ? AND status = 'booked'",
+    )
+    .bind("B167")
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(calendar_days.0, 2);
 }
 
 #[tokio::test]

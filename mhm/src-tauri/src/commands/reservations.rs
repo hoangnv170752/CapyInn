@@ -82,93 +82,17 @@ pub async fn create_reservation(state: State<'_, AppState>, app: tauri::AppHandl
 // ─── Confirm Reservation (Check-in from reservation) ───
 
 #[tauri::command]
-pub async fn confirm_reservation(state: State<'_, AppState>, app: tauri::AppHandle, booking_id: String) -> Result<Booking, String> {
-    let mut tx = state.db.begin().await.map_err(|e| e.to_string())?;
-
-    let row = sqlx::query("SELECT room_id, status, deposit_amount, total_price, scheduled_checkin, scheduled_checkout FROM bookings WHERE id = ?")
-        .bind(&booking_id)
-        .fetch_one(&mut *tx).await.map_err(|e| format!("Booking not found: {}", e))?;
-
-    let status: String = row.get("status");
-    if status != "booked" {
-        return Err(format!("Booking {} is not in 'booked' status (current: {})", booking_id, status));
-    }
-
-    let room_id: String = row.get("room_id");
-    let _deposit: f64 = row.try_get::<f64, _>("deposit_amount").unwrap_or(0.0);
-    let scheduled_checkin: Option<String> = row.get("scheduled_checkin");
-    let scheduled_checkout: Option<String> = row.get("scheduled_checkout");
-    let now = chrono::Local::now();
-    let _today_str = now.format("%Y-%m-%d").to_string();
-
-    // Recalculate nights and price based on actual check-in (today) vs scheduled checkout
-    let checkout_date_str = scheduled_checkout.as_deref().unwrap_or("");
-    let checkout_naive = chrono::NaiveDate::parse_from_str(checkout_date_str, "%Y-%m-%d")
-        .map_err(|e| format!("Invalid checkout date: {}", e))?;
-    let today_naive = now.date_naive();
-
-    let actual_nights = (checkout_naive - today_naive).num_days().max(1) as i32;
-
-    // Get room base price
-    let price_row = sqlx::query("SELECT base_price FROM rooms WHERE id = ?")
-        .bind(&room_id)
-        .fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
-    let base_price = get_f64(&price_row, "base_price");
-    let new_total = base_price * actual_nights as f64;
-
-    // Update booking: status, check_in_at, nights, total_price, expected_checkout
-    sqlx::query(
-        "UPDATE bookings SET status = 'active', check_in_at = ?, nights = ?, total_price = ?, expected_checkout = ?, paid_amount = COALESCE(deposit_amount, 0) WHERE id = ?"
-    )
-    .bind(now.to_rfc3339())
-    .bind(actual_nights)
-    .bind(new_total)
-    .bind(checkout_date_str)
-    .bind(&booking_id)
-    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    // Update room status to occupied
-    sqlx::query("UPDATE rooms SET status = 'occupied' WHERE id = ?")
-        .bind(&room_id)
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    // Add calendar rows for early check-in days (today → scheduled_checkin)
-    let sched_checkin_naive = scheduled_checkin.as_deref()
-        .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
-    if let Some(sched_date) = sched_checkin_naive {
-        if today_naive < sched_date {
-            let mut d = today_naive;
-            while d < sched_date {
-                let ds = d.format("%Y-%m-%d").to_string();
-                // Insert only if not already occupied by another booking
-                sqlx::query(
-                    "INSERT OR IGNORE INTO room_calendar (room_id, date, booking_id, status) VALUES (?, ?, ?, 'occupied')"
-                )
-                .bind(&room_id).bind(&ds).bind(&booking_id)
-                .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-                d += chrono::Duration::days(1);
-            }
-        }
-    }
-
-    // Update existing calendar rows from 'booked' to 'occupied'
-    sqlx::query("UPDATE room_calendar SET status = 'occupied' WHERE booking_id = ?")
-        .bind(&booking_id)
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    // Record charge transaction for room revenue (using recalculated total)
-    let charge_id = uuid::Uuid::new_v4().to_string();
-    sqlx::query(
-        "INSERT INTO transactions (id, booking_id, amount, type, note, created_at)
-         VALUES (?, ?, ?, 'charge', 'Room charge (reservation)', ?)"
-    )
-    .bind(&charge_id).bind(&booking_id).bind(new_total).bind(now.to_rfc3339())
-    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    tx.commit().await.map_err(|e| e.to_string())?;
+pub async fn confirm_reservation(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    booking_id: String,
+) -> Result<Booking, String> {
+    let booking = reservation_lifecycle::confirm_reservation(&state.db, &booking_id)
+        .await
+        .map_err(|error| error.to_string())?;
     emit_db_update(&app, "rooms");
 
-    super::rooms::get_booking_by_id(&state.db, &booking_id).await
+    Ok(booking)
 }
 
 // ─── Cancel Reservation ───
@@ -196,81 +120,27 @@ pub async fn cancel_reservation(state: State<'_, AppState>, app: tauri::AppHandl
 
 // ─── Modify Reservation ───
 
-pub async fn do_modify_reservation(pool: &Pool<Sqlite>, app_handle: Option<&tauri::AppHandle>, req: ModifyReservationRequest) -> Result<Booking, String> {
-    if req.new_nights <= 0 {
-        return Err("Number of nights must be greater than 0".to_string());
-    }
-
-    let mut tx = pool.begin().await.map_err(|e| e.to_string())?;
-
-    let row = sqlx::query("SELECT room_id, status FROM bookings WHERE id = ?")
-        .bind(&req.booking_id)
-        .fetch_one(&mut *tx).await.map_err(|e| format!("Booking not found: {}", e))?;
-
-    let status: String = row.get("status");
-    if status != "booked" {
-        return Err(format!("Can only modify reservations in 'booked' status (current: {})", status));
-    }
-
-    let room_id: String = row.get("room_id");
-
-    sqlx::query("DELETE FROM room_calendar WHERE booking_id = ?")
-        .bind(&req.booking_id)
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    let conflicts = sqlx::query(
-        "SELECT date FROM room_calendar WHERE room_id = ? AND date >= ? AND date < ?"
-    )
-    .bind(&room_id).bind(&req.new_check_in_date).bind(&req.new_check_out_date)
-    .fetch_all(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    if !conflicts.is_empty() {
-        let first: String = conflicts[0].get("date");
-        return Err(format!("Room {} is booked on {}. Cannot modify.", room_id, first));
-    }
-
-    let price_row = sqlx::query("SELECT base_price FROM rooms WHERE id = ?")
-        .bind(&room_id)
-        .fetch_one(&mut *tx).await.map_err(|e| e.to_string())?;
-    let base_price = get_f64(&price_row, "base_price");
-    let new_total = base_price * req.new_nights as f64;
-
-    sqlx::query(
-        "UPDATE bookings SET check_in_at = ?, expected_checkout = ?, scheduled_checkin = ?, scheduled_checkout = ?, nights = ?, total_price = ? WHERE id = ?"
-    )
-    .bind(&req.new_check_in_date)
-    .bind(&req.new_check_out_date)
-    .bind(&req.new_check_in_date)
-    .bind(&req.new_check_out_date)
-    .bind(req.new_nights)
-    .bind(new_total)
-    .bind(&req.booking_id)
-    .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-
-    let from = chrono::NaiveDate::parse_from_str(&req.new_check_in_date, "%Y-%m-%d")
-        .map_err(|e| e.to_string())?;
-    let to = chrono::NaiveDate::parse_from_str(&req.new_check_out_date, "%Y-%m-%d")
-        .map_err(|e| e.to_string())?;
-    let mut d = from;
-    while d < to {
-        sqlx::query(
-            "INSERT INTO room_calendar (room_id, date, booking_id, status) VALUES (?, ?, ?, 'booked')"
-        )
-        .bind(&room_id).bind(d.format("%Y-%m-%d").to_string()).bind(&req.booking_id)
-        .execute(&mut *tx).await.map_err(|e| e.to_string())?;
-        d += chrono::Duration::days(1);
-    }
-
-    tx.commit().await.map_err(|e| e.to_string())?;
+pub async fn do_modify_reservation(
+    pool: &Pool<Sqlite>,
+    app_handle: Option<&tauri::AppHandle>,
+    req: ModifyReservationRequest,
+) -> Result<Booking, String> {
+    let booking = reservation_lifecycle::modify_reservation(pool, req)
+        .await
+        .map_err(|error| error.to_string())?;
     if let Some(app) = app_handle {
         emit_db_update(app, "rooms");
     }
 
-    super::rooms::get_booking_by_id(pool, &req.booking_id).await
+    Ok(booking)
 }
 
 #[tauri::command]
-pub async fn modify_reservation(state: State<'_, AppState>, app: tauri::AppHandle, req: ModifyReservationRequest) -> Result<Booking, String> {
+pub async fn modify_reservation(
+    state: State<'_, AppState>,
+    app: tauri::AppHandle,
+    req: ModifyReservationRequest,
+) -> Result<Booking, String> {
     do_modify_reservation(&state.db, Some(&app), req).await
 }
 

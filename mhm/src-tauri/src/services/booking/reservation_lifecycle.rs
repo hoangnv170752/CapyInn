@@ -3,11 +3,11 @@ use sqlx::{Pool, Row, Sqlite};
 
 use crate::{
     domain::booking::{pricing::calculate_stay_price_tx, BookingError, BookingResult},
-    models::{status, Booking, CreateReservationRequest},
+    models::{status, Booking, CreateReservationRequest, ModifyReservationRequest},
 };
 
 use super::{
-    billing_service::{record_cancellation_fee_tx, record_deposit_tx},
+    billing_service::{record_cancellation_fee_tx, record_charge_tx, record_deposit_tx},
     support::begin_tx,
 };
 
@@ -188,6 +188,165 @@ pub async fn cancel_reservation(pool: &Pool<Sqlite>, booking_id: &str) -> Bookin
     Ok(())
 }
 
+pub async fn confirm_reservation(pool: &Pool<Sqlite>, booking_id: &str) -> BookingResult<Booking> {
+    let mut tx = begin_tx(pool).await?;
+    let reservation = load_booked_reservation(&mut tx, booking_id).await?;
+    reject_no_show_confirmation(&mut tx, booking_id).await?;
+
+    let now = Local::now();
+    let today = now.date_naive();
+    let today_str = today.format("%Y-%m-%d").to_string();
+    let scheduled_checkin = parse_date(&reservation.scheduled_checkin)?;
+    let scheduled_checkout = parse_date(&reservation.scheduled_checkout)?;
+    let effective_checkout = if scheduled_checkout <= today {
+        (today + chrono::Duration::days(1))
+            .format("%Y-%m-%d")
+            .to_string()
+    } else {
+        reservation.scheduled_checkout.clone()
+    };
+    let pricing = calculate_stay_price_tx(
+        &mut tx,
+        &reservation.room_id,
+        &today_str,
+        &effective_checkout,
+        &reservation.pricing_type,
+    )
+    .await?;
+    let actual_nights = (scheduled_checkout - today).num_days().max(1) as i32;
+    let deposit_amount = reservation.deposit_amount.unwrap_or(0.0);
+    let check_in_at = now.to_rfc3339();
+
+    sqlx::query(
+        "UPDATE bookings
+         SET status = ?, check_in_at = ?, expected_checkout = ?, nights = ?, total_price = ?, paid_amount = ?
+         WHERE id = ?",
+    )
+    .bind(status::booking::ACTIVE)
+    .bind(&check_in_at)
+    .bind(&reservation.scheduled_checkout)
+    .bind(actual_nights)
+    .bind(pricing.total)
+    .bind(deposit_amount)
+    .bind(booking_id)
+    .execute(&mut *tx)
+    .await?;
+
+    if today < scheduled_checkin {
+        insert_calendar_rows(
+            &mut tx,
+            &reservation.room_id,
+            booking_id,
+            today,
+            scheduled_checkin,
+            status::calendar::OCCUPIED,
+        )
+        .await?;
+    }
+
+    sqlx::query(
+        "UPDATE room_calendar SET status = ? WHERE booking_id = ? AND status = ?",
+    )
+    .bind(status::calendar::OCCUPIED)
+    .bind(booking_id)
+    .bind(status::calendar::BOOKED)
+    .execute(&mut *tx)
+    .await?;
+
+    sqlx::query("UPDATE rooms SET status = ? WHERE id = ?")
+        .bind(status::room::OCCUPIED)
+        .bind(&reservation.room_id)
+        .execute(&mut *tx)
+        .await?;
+
+    record_charge_tx(
+        &mut tx,
+        booking_id,
+        pricing.total,
+        "Room charge (reservation)",
+        check_in_at,
+    )
+    .await?;
+
+    tx.commit().await.map_err(BookingError::from)?;
+
+    fetch_booking(pool, booking_id).await
+}
+
+pub async fn modify_reservation(
+    pool: &Pool<Sqlite>,
+    req: ModifyReservationRequest,
+) -> BookingResult<Booking> {
+    if req.new_nights <= 0 {
+        return Err(BookingError::validation(
+            "Number of nights must be greater than 0".to_string(),
+        ));
+    }
+
+    let mut tx = begin_tx(pool).await?;
+    let reservation = load_booked_reservation(&mut tx, &req.booking_id).await?;
+
+    sqlx::query("DELETE FROM room_calendar WHERE booking_id = ? AND status = ?")
+        .bind(&req.booking_id)
+        .bind(status::calendar::BOOKED)
+        .execute(&mut *tx)
+        .await?;
+
+    let conflicts = sqlx::query(
+        "SELECT date FROM room_calendar WHERE room_id = ? AND date >= ? AND date < ? ORDER BY date ASC",
+    )
+    .bind(&reservation.room_id)
+    .bind(&req.new_check_in_date)
+    .bind(&req.new_check_out_date)
+    .fetch_all(&mut *tx)
+    .await?;
+
+    if let Some(first_conflict) = conflicts.first() {
+        let first_date: String = first_conflict.get("date");
+        return Err(BookingError::conflict(format!(
+            "Room {} is booked on {}. Cannot modify.",
+            reservation.room_id, first_date
+        )));
+    }
+
+    let pricing = calculate_stay_price_tx(
+        &mut tx,
+        &reservation.room_id,
+        &req.new_check_in_date,
+        &req.new_check_out_date,
+        &reservation.pricing_type,
+    )
+    .await?;
+
+    sqlx::query(
+        "UPDATE bookings
+         SET check_in_at = ?, expected_checkout = ?, scheduled_checkin = ?, scheduled_checkout = ?, nights = ?, total_price = ?
+         WHERE id = ?",
+    )
+    .bind(&req.new_check_in_date)
+    .bind(&req.new_check_out_date)
+    .bind(&req.new_check_in_date)
+    .bind(&req.new_check_out_date)
+    .bind(req.new_nights)
+    .bind(pricing.total)
+    .bind(&req.booking_id)
+    .execute(&mut *tx)
+    .await?;
+
+    insert_booked_calendar_rows(
+        &mut tx,
+        &reservation.room_id,
+        &req.booking_id,
+        &req.new_check_in_date,
+        &req.new_check_out_date,
+    )
+    .await?;
+
+    tx.commit().await.map_err(BookingError::from)?;
+
+    fetch_booking(pool, &req.booking_id).await
+}
+
 async fn insert_booked_calendar_rows(
     tx: &mut sqlx::Transaction<'_, Sqlite>,
     room_id: &str,
@@ -195,8 +354,25 @@ async fn insert_booked_calendar_rows(
     check_in_date: &str,
     check_out_date: &str,
 ) -> BookingResult<()> {
-    let from = parse_date(check_in_date)?;
-    let to = parse_date(check_out_date)?;
+    insert_calendar_rows(
+        tx,
+        room_id,
+        booking_id,
+        parse_date(check_in_date)?,
+        parse_date(check_out_date)?,
+        status::calendar::BOOKED,
+    )
+    .await
+}
+
+async fn insert_calendar_rows(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    room_id: &str,
+    booking_id: &str,
+    from: NaiveDate,
+    to: NaiveDate,
+    calendar_status: &str,
+) -> BookingResult<()> {
     let mut date = from;
 
     while date < to {
@@ -206,7 +382,7 @@ async fn insert_booked_calendar_rows(
         .bind(room_id)
         .bind(date.format("%Y-%m-%d").to_string())
         .bind(booking_id)
-        .bind(status::calendar::BOOKED)
+        .bind(calendar_status)
         .execute(&mut **tx)
         .await?;
 
@@ -214,6 +390,81 @@ async fn insert_booked_calendar_rows(
     }
 
     Ok(())
+}
+
+async fn load_booked_reservation(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    booking_id: &str,
+) -> BookingResult<BookedReservation> {
+    let row = sqlx::query(
+        "SELECT room_id, status, deposit_amount, scheduled_checkin, scheduled_checkout, pricing_type
+         FROM bookings
+         WHERE id = ?",
+    )
+    .bind(booking_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    let row =
+        row.ok_or_else(|| BookingError::not_found(format!("Booking not found: {}", booking_id)))?;
+    let booking_status: String = row.get("status");
+    if booking_status != status::booking::BOOKED {
+        return Err(BookingError::conflict(format!(
+            "Can only operate on reservations in 'booked' status (current: {})",
+            booking_status
+        )));
+    }
+
+    let scheduled_checkin = row
+        .get::<Option<String>, _>("scheduled_checkin")
+        .ok_or_else(|| {
+            BookingError::not_found(format!("Missing scheduled check-in for {}", booking_id))
+        })?;
+    let scheduled_checkout = row
+        .get::<Option<String>, _>("scheduled_checkout")
+        .ok_or_else(|| {
+            BookingError::not_found(format!("Missing scheduled checkout for {}", booking_id))
+        })?;
+
+    Ok(BookedReservation {
+        room_id: row.get("room_id"),
+        deposit_amount: row.get("deposit_amount"),
+        scheduled_checkin,
+        scheduled_checkout,
+        pricing_type: row
+            .get::<Option<String>, _>("pricing_type")
+            .unwrap_or_else(|| "nightly".to_string()),
+    })
+}
+
+async fn reject_no_show_confirmation(
+    tx: &mut sqlx::Transaction<'_, Sqlite>,
+    booking_id: &str,
+) -> BookingResult<()> {
+    let no_show = sqlx::query_scalar::<_, String>(
+        "SELECT booking_id FROM room_calendar WHERE booking_id = ? AND status = ? LIMIT 1",
+    )
+    .bind(booking_id)
+    .bind(status::booking::NO_SHOW)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    if no_show.is_some() {
+        return Err(BookingError::conflict(format!(
+            "Cannot confirm no-show reservation {}",
+            booking_id
+        )));
+    }
+
+    Ok(())
+}
+
+struct BookedReservation {
+    room_id: String,
+    deposit_amount: Option<f64>,
+    scheduled_checkin: String,
+    scheduled_checkout: String,
+    pricing_type: String,
 }
 
 async fn fetch_booking(pool: &Pool<Sqlite>, booking_id: &str) -> BookingResult<Booking> {
