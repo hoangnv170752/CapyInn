@@ -1,4 +1,4 @@
-use sqlx::{Pool, Row, Sqlite, SqlitePool};
+use sqlx::{Pool, Row, Sqlite, SqlitePool, Transaction};
 
 use crate::app_identity;
 
@@ -39,48 +39,75 @@ async fn ensure_setting_default(
 
 // ─── Versioned Inline Migrations ───
 
-async fn get_schema_version(pool: &Pool<Sqlite>) -> i32 {
-    // Create schema_version table if not exists
+async fn get_schema_version(pool: &Pool<Sqlite>) -> Result<i32, sqlx::Error> {
     sqlx::query(
         "CREATE TABLE IF NOT EXISTS schema_version (
             version INTEGER NOT NULL DEFAULT 0
         )",
     )
     .execute(pool)
-    .await
-    .ok();
+    .await?;
 
     let row = sqlx::query("SELECT version FROM schema_version LIMIT 1")
         .fetch_optional(pool)
-        .await
-        .ok()
-        .flatten();
+        .await?;
 
     match row {
-        Some(r) => r.get::<i32, _>("version"),
+        Some(row) => Ok(row.get::<i32, _>("version")),
         None => {
             sqlx::query("INSERT INTO schema_version (version) VALUES (0)")
                 .execute(pool)
-                .await
-                .ok();
-            0
+                .await?;
+            Ok(0)
         }
     }
 }
 
-async fn set_schema_version(pool: &Pool<Sqlite>, version: i32) {
-    sqlx::query("UPDATE schema_version SET version = ?")
+async fn set_schema_version(
+    executor: &mut Transaction<'_, Sqlite>,
+    version: i32,
+) -> Result<(), sqlx::Error> {
+    let result = sqlx::query("UPDATE schema_version SET version = ?")
         .bind(version)
-        .execute(pool)
-        .await
-        .ok();
+        .execute(&mut **executor)
+        .await?;
+
+    if result.rows_affected() == 0 {
+        sqlx::query("INSERT INTO schema_version (version) VALUES (?)")
+            .bind(version)
+            .execute(&mut **executor)
+            .await?;
+    }
+
+    Ok(())
+}
+
+async fn execute_compat_alter(
+    tx: &mut Transaction<'_, Sqlite>,
+    sql: &str,
+) -> Result<(), sqlx::Error> {
+    match sqlx::query(sql).execute(&mut **tx).await {
+        Ok(_) => Ok(()),
+        Err(error) if is_duplicate_column_error(&error) => {
+            eprintln!("Ignoring compatibility migration '{}': {}", sql, error);
+            Ok(())
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn is_duplicate_column_error(error: &sqlx::Error) -> bool {
+    let message = error.to_string().to_lowercase();
+    message.contains("duplicate column name") || message.contains("already exists")
 }
 
 pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Error> {
-    let current = get_schema_version(pool).await;
+    let current = get_schema_version(pool).await?;
 
     // ── V0: Base schema (original tables) ──
     if current < 1 {
+        let mut tx = pool.begin().await?;
+
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS rooms (
                 id          TEXT PRIMARY KEY,
@@ -92,7 +119,7 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 status      TEXT NOT NULL DEFAULT 'vacant'
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         sqlx::query(
@@ -110,7 +137,7 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 created_at      TEXT NOT NULL
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         sqlx::query(
@@ -130,7 +157,7 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 created_at          TEXT NOT NULL
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         sqlx::query(
@@ -140,7 +167,7 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 PRIMARY KEY (booking_id, guest_id)
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         sqlx::query(
@@ -153,7 +180,7 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 created_at  TEXT NOT NULL
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         sqlx::query(
@@ -166,7 +193,7 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 created_at   TEXT NOT NULL
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         sqlx::query(
@@ -180,7 +207,7 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 created_at   TEXT NOT NULL
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         sqlx::query(
@@ -189,14 +216,17 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 value TEXT NOT NULL
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
-        set_schema_version(pool, 1).await;
+        set_schema_version(&mut tx, 1).await?;
+        tx.commit().await?;
     }
 
     // ── V2: Phase 1 — Foundation + RBAC ──
     if current < 2 {
+        let mut tx = pool.begin().await?;
+
         // Users table
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS users (
@@ -208,7 +238,7 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 created_at TEXT NOT NULL
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // Audit logs table
@@ -223,41 +253,34 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 created_at  TEXT NOT NULL
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // Add phone and notes to guests
         // Using IF NOT EXISTS pattern: try ALTER, ignore if already exists
-        sqlx::query("ALTER TABLE guests ADD COLUMN phone TEXT")
-            .execute(pool)
-            .await
-            .ok();
-        sqlx::query("ALTER TABLE guests ADD COLUMN notes TEXT")
-            .execute(pool)
-            .await
-            .ok();
+        execute_compat_alter(&mut tx, "ALTER TABLE guests ADD COLUMN phone TEXT").await?;
+        execute_compat_alter(&mut tx, "ALTER TABLE guests ADD COLUMN notes TEXT").await?;
 
         // Add payment_method and created_by to transactions
-        sqlx::query("ALTER TABLE transactions ADD COLUMN payment_method TEXT DEFAULT 'cash'")
-            .execute(pool)
-            .await
-            .ok();
-        sqlx::query("ALTER TABLE transactions ADD COLUMN created_by TEXT")
-            .execute(pool)
-            .await
-            .ok();
+        execute_compat_alter(
+            &mut tx,
+            "ALTER TABLE transactions ADD COLUMN payment_method TEXT DEFAULT 'cash'",
+        )
+        .await?;
+        execute_compat_alter(&mut tx, "ALTER TABLE transactions ADD COLUMN created_by TEXT")
+            .await?;
 
         // Add created_by to bookings
-        sqlx::query("ALTER TABLE bookings ADD COLUMN created_by TEXT")
-            .execute(pool)
-            .await
-            .ok();
+        execute_compat_alter(&mut tx, "ALTER TABLE bookings ADD COLUMN created_by TEXT").await?;
 
-        set_schema_version(pool, 2).await;
+        set_schema_version(&mut tx, 2).await?;
+        tx.commit().await?;
     }
 
     // ── V3: Phase 2 — Pricing Engine ──
     if current < 3 {
+        let mut tx = pool.begin().await?;
+
         // pricing_rules: per room_type configuration
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS pricing_rules (
@@ -278,7 +301,7 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 UNIQUE(room_type)
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // special_dates: holiday/weekend overrides
@@ -292,26 +315,28 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 UNIQUE(date)
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // Add pricing_snapshot to bookings (JSON)
-        sqlx::query("ALTER TABLE bookings ADD COLUMN pricing_snapshot TEXT")
-            .execute(pool)
-            .await
-            .ok();
+        execute_compat_alter(&mut tx, "ALTER TABLE bookings ADD COLUMN pricing_snapshot TEXT")
+            .await?;
 
         // Add pricing_type to bookings
-        sqlx::query("ALTER TABLE bookings ADD COLUMN pricing_type TEXT DEFAULT 'nightly'")
-            .execute(pool)
-            .await
-            .ok();
+        execute_compat_alter(
+            &mut tx,
+            "ALTER TABLE bookings ADD COLUMN pricing_type TEXT DEFAULT 'nightly'",
+        )
+        .await?;
 
-        set_schema_version(pool, 3).await;
+        set_schema_version(&mut tx, 3).await?;
+        tx.commit().await?;
     }
 
     // ── V4: Phase 3+4 — Folio/Billing + Night Audit ──
     if current < 4 {
+        let mut tx = pool.begin().await?;
+
         // folio_lines: per-booking itemized charges
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS folio_lines (
@@ -324,7 +349,7 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 created_at  TEXT NOT NULL
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // night_audit_logs: daily revenue snapshots
@@ -345,20 +370,21 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 UNIQUE(audit_date)
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // Add is_audited flag to bookings
-        sqlx::query("ALTER TABLE bookings ADD COLUMN is_audited INTEGER DEFAULT 0")
-            .execute(pool)
-            .await
-            .ok();
+        execute_compat_alter(&mut tx, "ALTER TABLE bookings ADD COLUMN is_audited INTEGER DEFAULT 0")
+            .await?;
 
-        set_schema_version(pool, 4).await;
+        set_schema_version(&mut tx, 4).await?;
+        tx.commit().await?;
     }
 
     // ── V5: Dynamic Room Config — room_types table + per-person pricing ──
     if current < 5 {
+        let mut tx = pool.begin().await?;
+
         // room_types: admin creates these first, rooms reference them
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS room_types (
@@ -367,7 +393,7 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 created_at TEXT NOT NULL
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // Seed default room types from existing rooms
@@ -375,24 +401,29 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
             "INSERT OR IGNORE INTO room_types (id, name, created_at)
              SELECT DISTINCT lower(type), type, datetime('now') FROM rooms",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // Add per-person pricing columns
-        sqlx::query("ALTER TABLE rooms ADD COLUMN max_guests INTEGER NOT NULL DEFAULT 2")
-            .execute(pool)
-            .await
-            .ok();
-        sqlx::query("ALTER TABLE rooms ADD COLUMN extra_person_fee REAL NOT NULL DEFAULT 0")
-            .execute(pool)
-            .await
-            .ok();
+        execute_compat_alter(
+            &mut tx,
+            "ALTER TABLE rooms ADD COLUMN max_guests INTEGER NOT NULL DEFAULT 2",
+        )
+        .await?;
+        execute_compat_alter(
+            &mut tx,
+            "ALTER TABLE rooms ADD COLUMN extra_person_fee REAL NOT NULL DEFAULT 0",
+        )
+        .await?;
 
-        set_schema_version(pool, 5).await;
+        set_schema_version(&mut tx, 5).await?;
+        tx.commit().await?;
     }
 
     // ── V6: Reservation Calendar Block System ──
     if current < 6 {
+        let mut tx = pool.begin().await?;
+
         // room_calendar: each row = 1 day blocked for 1 room
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS room_calendar (
@@ -403,45 +434,49 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 PRIMARY KEY (room_id, date)
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_calendar_booking ON room_calendar(booking_id)")
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_calendar_status ON room_calendar(room_id, status)",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // Add reservation fields to bookings
-        sqlx::query("ALTER TABLE bookings ADD COLUMN booking_type TEXT DEFAULT 'walk-in'")
-            .execute(pool)
-            .await
-            .ok();
-        sqlx::query("ALTER TABLE bookings ADD COLUMN deposit_amount REAL DEFAULT 0")
-            .execute(pool)
-            .await
-            .ok();
-        sqlx::query("ALTER TABLE bookings ADD COLUMN guest_phone TEXT")
-            .execute(pool)
-            .await
-            .ok();
-        sqlx::query("ALTER TABLE bookings ADD COLUMN scheduled_checkin TEXT")
-            .execute(pool)
-            .await
-            .ok();
-        sqlx::query("ALTER TABLE bookings ADD COLUMN scheduled_checkout TEXT")
-            .execute(pool)
-            .await
-            .ok();
+        execute_compat_alter(
+            &mut tx,
+            "ALTER TABLE bookings ADD COLUMN booking_type TEXT DEFAULT 'walk-in'",
+        )
+        .await?;
+        execute_compat_alter(
+            &mut tx,
+            "ALTER TABLE bookings ADD COLUMN deposit_amount REAL DEFAULT 0",
+        )
+        .await?;
+        execute_compat_alter(&mut tx, "ALTER TABLE bookings ADD COLUMN guest_phone TEXT").await?;
+        execute_compat_alter(
+            &mut tx,
+            "ALTER TABLE bookings ADD COLUMN scheduled_checkin TEXT",
+        )
+        .await?;
+        execute_compat_alter(
+            &mut tx,
+            "ALTER TABLE bookings ADD COLUMN scheduled_checkout TEXT",
+        )
+        .await?;
 
-        set_schema_version(pool, 6).await;
+        set_schema_version(&mut tx, 6).await?;
+        tx.commit().await?;
     }
 
     // ── V7: MCP Gateway — API Key Storage ──
     if current < 7 {
+        let mut tx = pool.begin().await?;
+
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS gateway_api_keys (
                 id TEXT PRIMARY KEY,
@@ -451,14 +486,17 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 last_used_at TEXT
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
-        set_schema_version(pool, 7).await;
+        set_schema_version(&mut tx, 7).await?;
+        tx.commit().await?;
     }
 
     // ── V8: Invoice PDF System ──
     if current < 8 {
+        let mut tx = pool.begin().await?;
+
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS invoices (
                 id                TEXT PRIMARY KEY,
@@ -485,18 +523,21 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 created_at        TEXT NOT NULL
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_invoices_booking ON invoices(booking_id)")
-            .execute(pool)
+            .execute(&mut *tx)
             .await?;
 
-        set_schema_version(pool, 8).await;
+        set_schema_version(&mut tx, 8).await?;
+        tx.commit().await?;
     }
 
     // ── V9: Group Booking System ──
     if current < 9 {
+        let mut tx = pool.begin().await?;
+
         // booking_groups: group metadata
         sqlx::query(
             "CREATE TABLE IF NOT EXISTS booking_groups (
@@ -512,7 +553,7 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 created_at        TEXT NOT NULL
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // group_services: per-group add-on charges
@@ -530,31 +571,96 @@ pub(crate) async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), sqlx::Erro
                 created_at  TEXT NOT NULL
             )",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
         // Add group columns to bookings
-        sqlx::query("ALTER TABLE bookings ADD COLUMN group_id TEXT REFERENCES booking_groups(id)")
-            .execute(pool)
-            .await
-            .ok();
-        sqlx::query("ALTER TABLE bookings ADD COLUMN is_master_room INTEGER DEFAULT 0")
-            .execute(pool)
-            .await
-            .ok();
+        execute_compat_alter(
+            &mut tx,
+            "ALTER TABLE bookings ADD COLUMN group_id TEXT REFERENCES booking_groups(id)",
+        )
+        .await?;
+        execute_compat_alter(
+            &mut tx,
+            "ALTER TABLE bookings ADD COLUMN is_master_room INTEGER DEFAULT 0",
+        )
+        .await?;
 
         // Indexes
         sqlx::query("CREATE INDEX IF NOT EXISTS idx_bookings_group ON bookings(group_id)")
-            .execute(pool)
-            .await?;
+        .execute(&mut *tx)
+        .await?;
         sqlx::query(
             "CREATE INDEX IF NOT EXISTS idx_group_services_group ON group_services(group_id)",
         )
-        .execute(pool)
+        .execute(&mut *tx)
         .await?;
 
-        set_schema_version(pool, 9).await;
+        set_schema_version(&mut tx, 9).await?;
+        tx.commit().await?;
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{execute_compat_alter, get_schema_version, run_migrations};
+    use sqlx::{Row, SqlitePool};
+
+    #[tokio::test]
+    async fn migrations_bootstrap_schema_version_row() {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("connects in-memory sqlite");
+
+        let version = get_schema_version(&pool)
+            .await
+            .expect("bootstraps schema version state");
+
+        assert_eq!(version, 0);
+
+        let count: i64 = sqlx::query("SELECT COUNT(*) AS count FROM schema_version")
+            .fetch_one(&pool)
+            .await
+            .expect("reads schema_version row")
+            .get("count");
+
+        assert_eq!(count, 1);
+    }
+
+    #[tokio::test]
+    async fn migrations_ignore_duplicate_columns_in_compat_alters() {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("connects in-memory sqlite");
+
+        sqlx::query("CREATE TABLE sample (existing TEXT)")
+            .execute(&pool)
+            .await
+            .expect("creates sample table");
+
+        let mut tx = pool.begin().await.expect("starts test tx");
+        execute_compat_alter(&mut tx, "ALTER TABLE sample ADD COLUMN existing TEXT")
+            .await
+            .expect("duplicate column compatibility path is ignored");
+        tx.commit().await.expect("commits tx");
+    }
+
+    #[tokio::test]
+    async fn migrations_run_to_latest_schema_version() {
+        let pool = SqlitePool::connect("sqlite::memory:")
+            .await
+            .expect("connects in-memory sqlite");
+
+        run_migrations(&pool).await.expect("runs migrations");
+
+        let version: i32 = sqlx::query("SELECT version FROM schema_version LIMIT 1")
+            .fetch_one(&pool)
+            .await
+            .expect("reads final schema version")
+            .get("version");
+
+        assert_eq!(version, 9);
+    }
 }
