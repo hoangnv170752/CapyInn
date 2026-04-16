@@ -1,8 +1,10 @@
-use sha2::{Sha256, Digest};
-use sqlx::{Pool, Sqlite};
 use rand::Rng;
+use sha2::{Digest, Sha256};
+use sqlx::{Pool, Sqlite};
 
-const KEY_PREFIX: &str = "hmg_sk_";
+use crate::app_identity;
+
+const KEY_PREFIX: &str = app_identity::APP_API_KEY_PREFIX;
 const KEY_CHARS: &[u8] = b"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 
 /// Generate a new API key pair: (plaintext key, sha256 hash)
@@ -28,12 +30,16 @@ pub fn hash_key(key: &str) -> String {
 }
 
 /// Store a hashed API key in the database
-pub async fn store_api_key(pool: &Pool<Sqlite>, key_hash: &str, label: &str) -> Result<String, String> {
+pub async fn store_api_key(
+    pool: &Pool<Sqlite>,
+    key_hash: &str,
+    label: &str,
+) -> Result<String, String> {
     let id = uuid::Uuid::new_v4().to_string();
     let now = chrono::Local::now().to_rfc3339();
 
     sqlx::query(
-        "INSERT INTO gateway_api_keys (id, key_hash, label, created_at) VALUES (?, ?, ?, ?)"
+        "INSERT INTO gateway_api_keys (id, key_hash, label, created_at) VALUES (?, ?, ?, ?)",
     )
     .bind(&id)
     .bind(key_hash)
@@ -54,14 +60,13 @@ pub async fn validate_api_key(pool: &Pool<Sqlite>, key: &str) -> bool {
 
     let key_hash = hash_key(key);
 
-    let result: Option<(String,)> = sqlx::query_as(
-        "SELECT id FROM gateway_api_keys WHERE key_hash = ?"
-    )
-    .bind(&key_hash)
-    .fetch_optional(pool)
-    .await
-    .ok()
-    .flatten();
+    let result: Option<(String,)> =
+        sqlx::query_as("SELECT id FROM gateway_api_keys WHERE key_hash = ?")
+            .bind(&key_hash)
+            .fetch_optional(pool)
+            .await
+            .ok()
+            .flatten();
 
     if let Some((id,)) = result {
         // Update last_used_at

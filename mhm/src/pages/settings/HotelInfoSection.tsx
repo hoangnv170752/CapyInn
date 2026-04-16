@@ -5,9 +5,10 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { APP_NAME } from "@/lib/appIdentity";
 
 export default function HotelInfoSection() {
-  const [hotelName, setHotelName] = useState("MHM Hotel");
+  const [hotelName, setHotelName] = useState(APP_NAME);
   const [address, setAddress] = useState("");
   const [phone, setPhone] = useState("");
   const [rating, setRating] = useState("4.8");
@@ -18,7 +19,7 @@ export default function HotelInfoSection() {
         if (!value) return;
         try {
           const data = JSON.parse(value);
-          setHotelName(data.name || "MHM Hotel");
+          setHotelName(data.name || APP_NAME);
           setAddress(data.address || "");
           setPhone(data.phone || "");
           setRating(data.rating || "4.8");

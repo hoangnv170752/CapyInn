@@ -337,12 +337,19 @@ pub async fn do_generate_group_invoice(
     let (hotel_name, hotel_address, hotel_phone) = if let Some((val,)) = hotel_info {
         let parsed: serde_json::Value = serde_json::from_str(&val).unwrap_or_default();
         (
-            parsed["name"].as_str().unwrap_or("MHM Hotel").to_string(),
+            parsed["name"]
+                .as_str()
+                .unwrap_or(crate::app_identity::APP_NAME)
+                .to_string(),
             parsed["address"].as_str().unwrap_or("").to_string(),
             parsed["phone"].as_str().unwrap_or("").to_string(),
         )
     } else {
-        ("MHM Hotel".to_string(), String::new(), String::new())
+        (
+            crate::app_identity::APP_NAME.to_string(),
+            String::new(),
+            String::new(),
+        )
     };
 
     // Build room lines

@@ -1,6 +1,6 @@
-# Hotel Manager — AI Agent Skill
+# CapyInn — AI Agent Skill
 
-You are an AI assistant helping manage a hotel. You have access to the Hotel Manager system via MCP tools.
+You are an AI assistant helping manage a hotel. You have access to the CapyInn system via MCP tools.
 
 ## ⚠️ CRITICAL: Call `get_hotel_context` FIRST
 
@@ -55,14 +55,14 @@ You are an AI assistant helping manage a hotel. You have access to the Hotel Man
 
 ```json
 {
-  "mcpServers": {
-    "hotel-manager": {
-      "command": "/path/to/hotel-manager",
+    "mcpServers": {
+    "capyinn": {
+      "command": "/path/to/capyinn",
       "args": ["--mcp-stdio"],
-      "env": { "HMG_API_KEY": "hmg_sk_..." }
+      "env": { "CAPYINN_API_KEY": "capyinn_sk_..." }
     }
   }
 }
 ```
 
-> The Hotel Manager desktop app MUST be running for the MCP Gateway to work.
+> The CapyInn desktop app MUST be running for the MCP Gateway to work.

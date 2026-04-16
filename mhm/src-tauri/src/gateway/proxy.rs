@@ -11,7 +11,7 @@ pub fn run_proxy() {
     let port = match read_port_from_lockfile() {
         Some(p) => p,
         None => {
-            send_error("Hotel Manager is not running. Please open the app first.");
+            send_error("CapyInn is not running. Please open the app first.");
             std::process::exit(1);
         }
     };
@@ -20,7 +20,7 @@ pub fn run_proxy() {
     let mut stream = match TcpStream::connect(format!("127.0.0.1:{}", port)) {
         Ok(s) => s,
         Err(_) => {
-            send_error("Hotel Manager is not running. Cannot connect to MCP Gateway.");
+            send_error("CapyInn is not running. Cannot connect to MCP Gateway.");
             std::process::exit(1);
         }
     };
@@ -46,7 +46,7 @@ pub fn run_proxy() {
 
         // Forward to Process A via TCP
         if stream.write_all(line.as_bytes()).is_err() {
-            send_error("Lost connection to Hotel Manager.");
+            send_error("Lost connection to CapyInn.");
             break;
         }
         if stream.write_all(b"\n").is_err() {
@@ -61,7 +61,7 @@ pub fn run_proxy() {
         let mut reader = io::BufReader::new(&stream);
         match reader.read_line(&mut response) {
             Ok(0) | Err(_) => {
-                send_error("Hotel Manager closed the connection.");
+                send_error("CapyInn closed the connection.");
                 break;
             }
             Ok(_) => {}

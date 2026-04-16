@@ -3,6 +3,7 @@ use std::path::PathBuf;
 pub const APP_NAME: &str = "CapyInn";
 pub const APP_RUNTIME_DIR: &str = "CapyInn";
 pub const APP_DATABASE_FILENAME: &str = "capyinn.db";
+pub const APP_API_KEY_PREFIX: &str = "capyinn_sk_";
 pub const APP_GATEWAY_LOCKFILE: &str = ".gateway-port";
 pub const APP_BUNDLE_IDENTIFIER: &str = "io.capyinn.app";
 
@@ -68,6 +69,7 @@ mod tests {
         assert_eq!(exports_dir(), root.join("exports"));
         assert_eq!(gateway_lockfile(), root.join(APP_GATEWAY_LOCKFILE));
         assert_eq!(APP_NAME, "CapyInn");
+        assert_eq!(APP_API_KEY_PREFIX, "capyinn_sk_");
         assert_eq!(APP_BUNDLE_IDENTIFIER, "io.capyinn.app");
     }
 }

@@ -1,11 +1,12 @@
 use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::wrapper::Parameters;
 use rmcp::model::*;
-use rmcp::{tool, tool_router, tool_handler, ServerHandler};
+use rmcp::{tool, tool_handler, tool_router, ServerHandler};
 use sqlx::{Pool, Sqlite};
 use tauri::AppHandle;
 
 use super::models::*;
+use crate::app_identity;
 use crate::commands;
 use crate::models::{BookingFilter, CreateReservationRequest};
 
@@ -33,22 +34,33 @@ impl HotelTools {
 impl HotelTools {
     // ─── Read Tools (11) ───
 
-    #[tool(description = "Get the current date/time, timezone, and hotel context. ALWAYS call this first to ground your responses in reality and avoid date hallucinations.")]
+    #[tool(
+        description = "Get the current date/time, timezone, and hotel context. ALWAYS call this first to ground your responses in reality and avoid date hallucinations."
+    )]
     async fn get_hotel_context(&self) -> String {
         let now = chrono::Local::now();
 
-        let (hotel_name, hotel_address) = match commands::do_get_settings(&self.pool, "hotel_info").await.unwrap_or(None) {
+        let (hotel_name, hotel_address) = match commands::do_get_settings(&self.pool, "hotel_info")
+            .await
+            .unwrap_or(None)
+        {
             Some(json_str) => {
                 if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json_str) {
                     (
-                        v.get("name").and_then(|s| s.as_str()).unwrap_or("Hotel Manager").to_string(),
-                        v.get("address").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                        v.get("name")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or(app_identity::APP_NAME)
+                            .to_string(),
+                        v.get("address")
+                            .and_then(|s| s.as_str())
+                            .unwrap_or("")
+                            .to_string(),
                     )
                 } else {
-                    ("Hotel Manager".to_string(), String::new())
+                    (app_identity::APP_NAME.to_string(), String::new())
                 }
             }
-            None => ("Hotel Manager".to_string(), String::new()),
+            None => (app_identity::APP_NAME.to_string(), String::new()),
         };
 
         let context = serde_json::json!({
@@ -63,18 +75,29 @@ impl HotelTools {
         serde_json::to_string_pretty(&context).unwrap()
     }
 
-    #[tool(description = "Check room availability for a specific date range. Returns conflicts if any.")]
+    #[tool(
+        description = "Check room availability for a specific date range. Returns conflicts if any."
+    )]
     async fn check_availability(
         &self,
         Parameters(input): Parameters<CheckAvailabilityInput>,
     ) -> String {
-        match commands::do_check_availability(&self.pool, &input.room_id, &input.from_date, &input.to_date).await {
+        match commands::do_check_availability(
+            &self.pool,
+            &input.room_id,
+            &input.from_date,
+            &input.to_date,
+        )
+        .await
+        {
             Ok(result) => serde_json::to_string_pretty(&result).unwrap(),
             Err(e) => format!("Error: {}", e),
         }
     }
 
-    #[tool(description = "Get list of all rooms with their current status (vacant, occupied, cleaning, booked).")]
+    #[tool(
+        description = "Get list of all rooms with their current status (vacant, occupied, cleaning, booked)."
+    )]
     async fn get_rooms(&self) -> String {
         match commands::do_get_rooms(&self.pool).await {
             Ok(rooms) => serde_json::to_string_pretty(&rooms).unwrap(),
@@ -82,11 +105,10 @@ impl HotelTools {
         }
     }
 
-    #[tool(description = "Get detailed info for a specific room including current booking and guests.")]
-    async fn get_room_detail(
-        &self,
-        Parameters(input): Parameters<GetRoomDetailInput>,
-    ) -> String {
+    #[tool(
+        description = "Get detailed info for a specific room including current booking and guests."
+    )]
+    async fn get_room_detail(&self, Parameters(input): Parameters<GetRoomDetailInput>) -> String {
         match commands::do_get_room_detail(&self.pool, &input.room_id).await {
             Ok(detail) => serde_json::to_string_pretty(&detail).unwrap(),
             Err(e) => format!("Error: {}", e),
@@ -101,7 +123,9 @@ impl HotelTools {
         }
     }
 
-    #[tool(description = "Get hotel dashboard statistics: total rooms, occupied, vacant, cleaning, revenue today.")]
+    #[tool(
+        description = "Get hotel dashboard statistics: total rooms, occupied, vacant, cleaning, revenue today."
+    )]
     async fn get_dashboard_stats(&self) -> String {
         match commands::do_get_dashboard_stats(&self.pool).await {
             Ok(stats) => serde_json::to_string_pretty(&stats).unwrap(),
@@ -110,10 +134,7 @@ impl HotelTools {
     }
 
     #[tool(description = "Get all bookings with optional filters by status, date range.")]
-    async fn get_all_bookings(
-        &self,
-        Parameters(input): Parameters<GetBookingsInput>,
-    ) -> String {
+    async fn get_all_bookings(&self, Parameters(input): Parameters<GetBookingsInput>) -> String {
         let filter = if input.status.is_some() || input.from.is_some() || input.to.is_some() {
             Some(BookingFilter {
                 status: input.status,
@@ -130,7 +151,9 @@ impl HotelTools {
         }
     }
 
-    #[tool(description = "Get all room availability overview including upcoming reservations for each room.")]
+    #[tool(
+        description = "Get all room availability overview including upcoming reservations for each room."
+    )]
     async fn get_rooms_availability(&self) -> String {
         match commands::do_get_rooms_availability(&self.pool).await {
             Ok(rooms) => serde_json::to_string_pretty(&rooms).unwrap(),
@@ -138,7 +161,9 @@ impl HotelTools {
         }
     }
 
-    #[tool(description = "Get pricing rules for all room types (hourly, overnight, daily rates and surcharges).")]
+    #[tool(
+        description = "Get pricing rules for all room types (hourly, overnight, daily rates and surcharges)."
+    )]
     async fn get_pricing_rules(&self) -> String {
         match commands::do_get_pricing_rules(&self.pool).await {
             Ok(rules) => serde_json::to_string_pretty(&rules).unwrap(),
@@ -146,11 +171,10 @@ impl HotelTools {
         }
     }
 
-    #[tool(description = "Get a hotel setting by key. Common keys: hotel_name, hotel_address, hotel_phone, hotel_rules.")]
-    async fn get_hotel_info(
-        &self,
-        Parameters(input): Parameters<GetSettingsInput>,
-    ) -> String {
+    #[tool(
+        description = "Get a hotel setting by key. Common keys: hotel_name, hotel_address, hotel_phone, hotel_rules."
+    )]
+    async fn get_hotel_info(&self, Parameters(input): Parameters<GetSettingsInput>) -> String {
         match commands::do_get_settings(&self.pool, &input.key).await {
             Ok(Some(value)) => value,
             Ok(None) => format!("Setting '{}' not found", input.key),
@@ -158,11 +182,10 @@ impl HotelTools {
         }
     }
 
-    #[tool(description = "Calculate estimated price for a stay. Supports nightly, hourly, overnight, and daily pricing types.")]
-    async fn calculate_price(
-        &self,
-        Parameters(input): Parameters<CalculatePriceInput>,
-    ) -> String {
+    #[tool(
+        description = "Calculate estimated price for a stay. Supports nightly, hourly, overnight, and daily pricing types."
+    )]
+    async fn calculate_price(&self, Parameters(input): Parameters<CalculatePriceInput>) -> String {
         match commands::do_calculate_price_preview(
             &self.pool,
             &input.room_type,
@@ -179,7 +202,9 @@ impl HotelTools {
 
     // ─── Write Tools (3) ───
 
-    #[tool(description = "Create a new reservation (booking with status 'booked'). The reservation must be confirmed by hotel staff before check-in.")]
+    #[tool(
+        description = "Create a new reservation (booking with status 'booked'). The reservation must be confirmed by hotel staff before check-in."
+    )]
     async fn create_reservation(
         &self,
         Parameters(input): Parameters<CreateReservationInput>,
@@ -201,10 +226,13 @@ impl HotelTools {
             Ok(booking) => {
                 if let Some(ref handle) = self.app_handle {
                     use tauri::Emitter;
-                    let _ = handle.emit("mcp_reservation_created", serde_json::json!({
-                        "booking_id": booking.id,
-                        "room_id": booking.room_id,
-                    }));
+                    let _ = handle.emit(
+                        "mcp_reservation_created",
+                        serde_json::json!({
+                            "booking_id": booking.id,
+                            "room_id": booking.room_id,
+                        }),
+                    );
                 }
 
                 serde_json::to_string_pretty(&booking).unwrap()
@@ -213,18 +241,28 @@ impl HotelTools {
         }
     }
 
-    #[tool(description = "Cancel an existing reservation. Only reservations with status 'booked' can be cancelled.")]
+    #[tool(
+        description = "Cancel an existing reservation. Only reservations with status 'booked' can be cancelled."
+    )]
     async fn cancel_reservation(
         &self,
         Parameters(input): Parameters<CancelReservationInput>,
     ) -> String {
-        match commands::do_cancel_reservation(&self.pool, self.app_handle.as_ref(), &input.booking_id).await {
+        match commands::do_cancel_reservation(
+            &self.pool,
+            self.app_handle.as_ref(),
+            &input.booking_id,
+        )
+        .await
+        {
             Ok(()) => format!("Reservation {} cancelled successfully", input.booking_id),
             Err(e) => format!("Error: {}", e),
         }
     }
 
-    #[tool(description = "Modify an existing reservation's dates. Only reservations with status 'booked' can be modified.")]
+    #[tool(
+        description = "Modify an existing reservation's dates. Only reservations with status 'booked' can be modified."
+    )]
     async fn modify_reservation(
         &self,
         Parameters(input): Parameters<ModifyReservationInput>,
@@ -242,18 +280,19 @@ impl HotelTools {
         }
     }
 
-    #[tool(description = "Get or generate an invoice for a booking. Returns invoice data including pricing breakdown, hotel info, and guest details. Use this to send invoice info to guests via chat.")]
-    async fn get_invoice(
-        &self,
-        Parameters(input): Parameters<GetInvoiceInput>,
-    ) -> String {
+    #[tool(
+        description = "Get or generate an invoice for a booking. Returns invoice data including pricing breakdown, hotel info, and guest details. Use this to send invoice info to guests via chat."
+    )]
+    async fn get_invoice(&self, Parameters(input): Parameters<GetInvoiceInput>) -> String {
         // Try to get existing, or generate new
         match commands::do_generate_invoice(&self.pool, &input.booking_id).await {
             Ok(inv) => {
                 // Return a human-readable text format for LLM
                 let mut text = format!(
                     "=== {} ===\n{}\nPhone: {}\n\nINVOICE {}\nDate: {}\n\nGuest: {}\n",
-                    inv.hotel_name, inv.hotel_address, inv.hotel_phone,
+                    inv.hotel_name,
+                    inv.hotel_address,
+                    inv.hotel_phone,
                     inv.invoice_number,
                     &inv.created_at[..10],
                     inv.guest_name,
@@ -263,8 +302,10 @@ impl HotelTools {
                 }
                 text.push_str(&format!(
                     "\nRoom: {} ({})\nCheck-in: {}\nCheck-out: {}\nNights: {}\n\nPRICE BREAKDOWN\n",
-                    inv.room_name, inv.room_type,
-                    &inv.check_in[..10], &inv.check_out[..10],
+                    inv.room_name,
+                    inv.room_type,
+                    &inv.check_in[..10],
+                    &inv.check_out[..10],
                     inv.nights,
                 ));
                 for line in &inv.pricing_breakdown {
@@ -291,11 +332,11 @@ impl ServerHandler for HotelTools {
         caps.tools = Some(ToolsCapability::default());
 
         ServerInfo::new(caps)
-            .with_server_info(Implementation::new("hotel-manager", "0.1.0"))
+            .with_server_info(Implementation::new("capyinn", "0.1.0"))
             .with_instructions(
-                "Hotel Manager MCP Server. Provides tools to query room availability, \
+                "CapyInn MCP Server. Provides tools to query room availability, \
                  pricing, bookings, and create/modify/cancel reservations. \
-                 ALWAYS call get_hotel_context first to get the current date/time."
+                 ALWAYS call get_hotel_context first to get the current date/time.",
             )
     }
 }

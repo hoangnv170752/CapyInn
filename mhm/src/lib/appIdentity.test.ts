@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  APP_API_KEY_PREFIX,
   APP_BUNDLE_IDENTIFIER,
   APP_DATABASE_FILENAME,
   APP_LOGO_ALT,
@@ -16,6 +17,7 @@ describe("appIdentity", () => {
     expect(APP_LOGO_ALT).toBe("CapyInn logo");
     expect(EXPORT_PREFIX).toBe("CapyInn");
     expect(ONBOARDING_DRAFT_KEY).toBe("capyinn-onboarding-draft");
+    expect(APP_API_KEY_PREFIX).toBe("capyinn_sk_");
     expect(APP_RUNTIME_DIR).toBe("CapyInn");
     expect(APP_DATABASE_FILENAME).toBe("capyinn.db");
     expect(APP_BUNDLE_IDENTIFIER).toBe("io.capyinn.app");

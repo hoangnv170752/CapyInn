@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { TrendingUp, TrendingDown, PieChart, Plus, Download, X, Wallet, Receipt } from "lucide-react";
 import { fmtMoney } from "@/lib/format";
+import { EXPORT_PREFIX } from "@/lib/appIdentity";
 import type { Expense, RevenueStats } from "@/types";
 
 type Period = "today" | "week" | "month";
@@ -61,7 +62,7 @@ export default function Statistics() {
     csv += `\nTổng doanh thu,,${revenue.total_revenue}\nTổng chi phí,,${totalExp}\nLợi nhuận,,${profit}\n`;
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8" });
     const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
-    a.download = `MHM-BaoCao-${new Date().toISOString().split("T")[0]}.csv`; a.click();
+    a.download = `${EXPORT_PREFIX}-BaoCao-${new Date().toISOString().split("T")[0]}.csv`; a.click();
   };
 
   return (

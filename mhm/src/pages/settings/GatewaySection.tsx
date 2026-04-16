@@ -5,6 +5,7 @@ import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { APP_API_KEY_PREFIX, APP_NAME } from "@/lib/appIdentity";
 import type { GatewayStatus } from "@/types";
 
 export default function GatewaySection() {
@@ -43,10 +44,10 @@ export default function GatewaySection() {
     const config = JSON.stringify(
       {
         mcpServers: {
-          "hotel-manager": {
-            command: "/path/to/hotel-manager",
+          capyinn: {
+            command: "/path/to/capyinn",
             args: ["--mcp-stdio"],
-            env: { HMG_API_KEY: apiKey || "hmg_sk_..." },
+            env: { CAPYINN_API_KEY: apiKey || `${APP_API_KEY_PREFIX}...` },
           },
         },
       },
@@ -73,7 +74,7 @@ export default function GatewaySection() {
           <Wifi size={20} className="text-brand-primary" />
           MCP Gateway
         </h3>
-        <p className="text-sm text-brand-muted">Cho phép AI agents (ZeroClaw, Claude Desktop...) kết nối và quản lý khách sạn</p>
+        <p className="text-sm text-brand-muted">Cho phép AI agents (ZeroClaw, Claude Desktop...) kết nối và quản lý {APP_NAME}</p>
       </div>
 
       <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
@@ -117,7 +118,7 @@ export default function GatewaySection() {
             </div>
             <div className="flex items-center gap-2">
               <code className="flex-1 text-xs bg-slate-100 px-3 py-2 rounded-lg font-mono break-all">
-                {showKey ? apiKey : `hmg_sk_${"•".repeat(32)}`}
+                {showKey ? apiKey : `${APP_API_KEY_PREFIX}${"•".repeat(32)}`}
               </code>
               <button
                 onClick={() => {

@@ -1,5 +1,6 @@
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { APP_RUNTIME_DIR } from "@/lib/appIdentity";
 
 export default function OcrConfigSection() {
   return (
@@ -12,7 +13,7 @@ export default function OcrConfigSection() {
       <div className="space-y-4">
         <div>
           <Label>Thư mục scan</Label>
-          <Input defaultValue="~/MHM/Scans" className="mt-1.5" readOnly />
+          <Input defaultValue={`~/${APP_RUNTIME_DIR}/Scans`} className="mt-1.5" readOnly />
         </div>
         <div className="flex items-center justify-between p-4 bg-slate-50 rounded-xl">
           <div>

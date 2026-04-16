@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
+import { ONBOARDING_DRAFT_KEY } from "@/lib/appIdentity";
 import type { OnboardingDraft, OnboardingRoomTypeDraft } from "./types";
-
-const STORAGE_KEY = "mhm-onboarding-draft";
 
 export function createRoomTypeDraft(): OnboardingRoomTypeDraft {
   return {
@@ -42,7 +41,7 @@ const DEFAULT_DRAFT: OnboardingDraft = {
 
 export function useOnboardingDraft() {
   const [draft, setDraft] = useState<OnboardingDraft>(() => {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = localStorage.getItem(ONBOARDING_DRAFT_KEY);
     if (!raw) return DEFAULT_DRAFT;
 
     try {
@@ -53,12 +52,12 @@ export function useOnboardingDraft() {
   });
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(draft));
+    localStorage.setItem(ONBOARDING_DRAFT_KEY, JSON.stringify(draft));
   }, [draft]);
 
   return {
     draft,
     setDraft,
-    clearDraft: () => localStorage.removeItem(STORAGE_KEY),
+    clearDraft: () => localStorage.removeItem(ONBOARDING_DRAFT_KEY),
   };
 }

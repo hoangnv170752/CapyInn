@@ -1,9 +1,8 @@
-use sqlx::{Pool, Sqlite, Row};
-use tauri::State;
-use crate::models::*;
-use super::{AppState, get_f64};
 use super::settings::do_get_settings;
-
+use super::{get_f64, AppState};
+use crate::models::*;
+use sqlx::{Pool, Row, Sqlite};
+use tauri::State;
 
 // ═══════════════════════════════════════════════
 // Invoice PDF Commands
@@ -11,11 +10,16 @@ use super::settings::do_get_settings;
 
 const DEFAULT_POLICY_TEXT: &str = "• Check-in: 14:00 | Check-out: 12:00\n• Cancel 24h+ before: full deposit refund\n• Cancel within 24h: 50% deposit retained\n• No refund for no-show";
 
-pub async fn do_generate_invoice(pool: &Pool<Sqlite>, booking_id: &str) -> Result<InvoiceData, String> {
+pub async fn do_generate_invoice(
+    pool: &Pool<Sqlite>,
+    booking_id: &str,
+) -> Result<InvoiceData, String> {
     // Always regenerate: delete any existing invoice for this booking
     sqlx::query("DELETE FROM invoices WHERE booking_id = ?")
         .bind(booking_id)
-        .execute(pool).await.map_err(|e| e.to_string())?;
+        .execute(pool)
+        .await
+        .map_err(|e| e.to_string())?;
 
     // Fetch booking
     let b = sqlx::query(
@@ -28,25 +32,47 @@ pub async fn do_generate_invoice(pool: &Pool<Sqlite>, booking_id: &str) -> Resul
          FROM bookings b
          JOIN rooms r ON r.id = b.room_id
          JOIN guests g ON g.id = b.primary_guest_id
-         WHERE b.id = ?"
-    ).bind(booking_id).fetch_optional(pool).await.map_err(|e| e.to_string())?;
+         WHERE b.id = ?",
+    )
+    .bind(booking_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
 
     let b = b.ok_or_else(|| format!("Booking '{}' not found", booking_id))?;
 
     // Get hotel info from settings (stored as JSON blob under "hotel_info")
-    let (hotel_name, hotel_address, hotel_phone) = match do_get_settings(pool, "hotel_info").await? {
+    let (hotel_name, hotel_address, hotel_phone) = match do_get_settings(pool, "hotel_info").await?
+    {
         Some(json_str) => {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(&json_str) {
                 (
-                    v.get("name").and_then(|s| s.as_str()).unwrap_or("Hotel Manager").to_string(),
-                    v.get("address").and_then(|s| s.as_str()).unwrap_or("").to_string(),
-                    v.get("phone").and_then(|s| s.as_str()).unwrap_or("").to_string(),
+                    v.get("name")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or(crate::app_identity::APP_NAME)
+                        .to_string(),
+                    v.get("address")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    v.get("phone")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("")
+                        .to_string(),
                 )
             } else {
-                ("Hotel Manager".to_string(), String::new(), String::new())
+                (
+                    crate::app_identity::APP_NAME.to_string(),
+                    String::new(),
+                    String::new(),
+                )
             }
         }
-        None => ("Hotel Manager".to_string(), String::new(), String::new()),
+        None => (
+            crate::app_identity::APP_NAME.to_string(),
+            String::new(),
+            String::new(),
+        ),
     };
 
     let room_name: String = b.get("room_name");
@@ -58,17 +84,23 @@ pub async fn do_generate_invoice(pool: &Pool<Sqlite>, booking_id: &str) -> Resul
     let deposit_amount: f64 = b.try_get::<f64, _>("deposit_amount").unwrap_or(0.0);
     let notes: Option<String> = b.get("notes");
 
-    let check_in: String = b.try_get::<String, _>("scheduled_checkin")
+    let check_in: String = b
+        .try_get::<String, _>("scheduled_checkin")
         .ok()
         .or_else(|| Some(b.get::<String, _>("check_in_at")))
         .unwrap();
-    let check_out: String = b.try_get::<String, _>("scheduled_checkout")
+    let check_out: String = b
+        .try_get::<String, _>("scheduled_checkout")
         .ok()
         .or_else(|| Some(b.get::<String, _>("expected_checkout")))
         .unwrap();
 
     // Build pricing breakdown — always use fresh English labels
-    let per_night = if nights > 0 { total_price / nights as f64 } else { total_price };
+    let per_night = if nights > 0 {
+        total_price / nights as f64
+    } else {
+        total_price
+    };
     let breakdown: Vec<crate::pricing::PricingLine> = vec![crate::pricing::PricingLine {
         label: format!("{} night(s) x {}d", nights, per_night as i64),
         amount: total_price,
@@ -80,11 +112,20 @@ pub async fn do_generate_invoice(pool: &Pool<Sqlite>, booking_id: &str) -> Resul
     // Generate invoice number: INV-YYYYMMDD-XXX
     let today = chrono::Local::now().format("%Y%m%d").to_string();
     let prefix = format!("INV-{}", today);
-    let max_row: (Option<String>,) = sqlx::query_as(
-        "SELECT MAX(invoice_number) FROM invoices WHERE invoice_number LIKE ?"
-    ).bind(format!("{}-%", prefix)).fetch_one(pool).await.map_err(|e| e.to_string())?;
+    let max_row: (Option<String>,) =
+        sqlx::query_as("SELECT MAX(invoice_number) FROM invoices WHERE invoice_number LIKE ?")
+            .bind(format!("{}-%", prefix))
+            .fetch_one(pool)
+            .await
+            .map_err(|e| e.to_string())?;
     let next_seq = match max_row.0 {
-        Some(ref last) => last.rsplit('-').next().and_then(|s| s.parse::<i64>().ok()).unwrap_or(0) + 1,
+        Some(ref last) => {
+            last.rsplit('-')
+                .next()
+                .and_then(|s| s.parse::<i64>().ok())
+                .unwrap_or(0)
+                + 1
+        }
         None => 1,
     };
     let invoice_number = format!("{}-{:03}", prefix, next_seq);
@@ -137,14 +178,21 @@ pub async fn do_generate_invoice(pool: &Pool<Sqlite>, booking_id: &str) -> Resul
     })
 }
 
-pub async fn do_get_invoice(pool: &Pool<Sqlite>, booking_id: &str) -> Result<Option<InvoiceData>, String> {
+pub async fn do_get_invoice(
+    pool: &Pool<Sqlite>,
+    booking_id: &str,
+) -> Result<Option<InvoiceData>, String> {
     let row = sqlx::query(
         "SELECT id, invoice_number, booking_id, hotel_name, hotel_address, hotel_phone,
                 guest_name, guest_phone, room_name, room_type, check_in, check_out, nights,
                 pricing_breakdown, subtotal, deposit_amount, total, balance_due,
                 policy_text, notes, status, created_at
-         FROM invoices WHERE booking_id = ? ORDER BY created_at DESC LIMIT 1"
-    ).bind(booking_id).fetch_optional(pool).await.map_err(|e| e.to_string())?;
+         FROM invoices WHERE booking_id = ? ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(booking_id)
+    .fetch_optional(pool)
+    .await
+    .map_err(|e| e.to_string())?;
 
     match row {
         Some(r) => {
@@ -176,17 +224,23 @@ pub async fn do_get_invoice(pool: &Pool<Sqlite>, booking_id: &str) -> Result<Opt
                 status: r.get("status"),
                 created_at: r.get("created_at"),
             }))
-        },
+        }
         None => Ok(None),
     }
 }
 
 #[tauri::command]
-pub async fn generate_invoice(state: State<'_, AppState>, booking_id: String) -> Result<InvoiceData, String> {
+pub async fn generate_invoice(
+    state: State<'_, AppState>,
+    booking_id: String,
+) -> Result<InvoiceData, String> {
     do_generate_invoice(&state.db, &booking_id).await
 }
 
 #[tauri::command]
-pub async fn get_invoice(state: State<'_, AppState>, booking_id: String) -> Result<Option<InvoiceData>, String> {
+pub async fn get_invoice(
+    state: State<'_, AppState>,
+    booking_id: String,
+) -> Result<Option<InvoiceData>, String> {
     do_get_invoice(&state.db, &booking_id).await
 }

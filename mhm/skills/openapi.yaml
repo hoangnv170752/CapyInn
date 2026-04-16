@@ -1,13 +1,13 @@
 openapi: '3.1.0'
 info:
-  title: Hotel Manager MCP Gateway
+  title: CapyInn MCP Gateway
   version: '0.1.0'
   description: |
-    Hotel Management System MCP Gateway API.
+    CapyInn MCP Gateway API.
     Exposes room management, booking, pricing, and reservation tools via MCP protocol.
     All dates use YYYY-MM-DD format. Timezone: Asia/Ho_Chi_Minh.
   contact:
-    name: Hotel Manager
+    name: CapyInn
 servers:
   - url: http://127.0.0.1:61234
     description: Local MCP Gateway (default port)

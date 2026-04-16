@@ -1,16 +1,16 @@
 {
-    "name": "hotel-manager",
+    "name": "capyinn",
     "version": "0.1.0",
-    "description": "Hotel Manager MCP Server — manage rooms, bookings, pricing, and reservations for a hotel.",
+    "description": "CapyInn MCP Server — manage rooms, bookings, pricing, and reservations for a hotel.",
     "protocol": "mcp",
     "transport": {
         "stdio": {
-            "command": "hotel-manager",
+            "command": "capyinn",
             "args": [
                 "--mcp-stdio"
             ],
             "env": {
-                "HMG_API_KEY": "<your-api-key>"
+                "CAPYINN_API_KEY": "<your-api-key>"
             }
         },
         "streamable-http": {

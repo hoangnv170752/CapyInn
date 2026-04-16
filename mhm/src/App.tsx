@@ -19,6 +19,7 @@ import AppLogo from "./components/AppLogo";
 import { Home, Calendar, BedDouble, Users, Sparkles, BarChart3, Settings as SettingsIcon, ChevronsLeft, ChevronsRight, LogOut, Moon, UsersRound } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { APP_NAME } from "@/lib/appIdentity";
 import { Toaster, toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import type { BootstrapStatus } from "@/types";
@@ -197,7 +198,7 @@ export default function App() {
 
         {/* Logo */}
         <div className={`${collapsed ? "px-4 py-6" : "p-6"} mb-4 flex justify-center`}>
-          <AppLogo className={collapsed ? "h-8 w-8 shrink-0" : "h-12 w-12 shrink-0"} />
+          <AppLogo className={collapsed ? "h-10 w-10 shrink-0" : "h-14 w-14 shrink-0"} />
         </div>
 
         {/* Navigation */}
@@ -265,7 +266,7 @@ export default function App() {
         <header className="h-[88px] flex items-center justify-between px-10 bg-brand-bg/80 backdrop-blur-md sticky top-0 z-10 data-tauri-drag-region shrink-0">
           <div className="pointer-events-none">
             <h1 className="text-2xl font-bold tracking-tight">
-              {PAGE_TITLES[activeTab] || "MHM Hotel"}
+              {PAGE_TITLES[activeTab] || APP_NAME}
             </h1>
             <p className="text-sm text-brand-muted">{today}</p>
           </div>
