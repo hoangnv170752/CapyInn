@@ -74,7 +74,7 @@ pub fn run_proxy() {
 }
 
 fn read_port_from_lockfile() -> Option<u16> {
-    let lockfile = app_identity::gateway_lockfile();
+    let lockfile = app_identity::gateway_lockfile_opt()?;
     let content = std::fs::read_to_string(&lockfile).ok()?;
     content.trim().parse().ok()
 }

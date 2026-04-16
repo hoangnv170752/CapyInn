@@ -19,14 +19,17 @@ pub struct CccdInfo {
 
 /// Find models directory from multiple candidates
 pub fn find_models_dir() -> Result<PathBuf, String> {
-    let candidates: Vec<PathBuf> = vec![
-        app_identity::models_dir(),
-        std::env::current_dir().unwrap_or_default().join("models"),
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(models_dir) = app_identity::models_dir_opt() {
+        candidates.push(models_dir);
+    }
+    candidates.push(std::env::current_dir().unwrap_or_default().join("models"));
+    candidates.push(
         std::env::current_dir()
             .unwrap_or_default()
             .join("..")
             .join("models"),
-    ];
+    );
 
     candidates
         .iter()

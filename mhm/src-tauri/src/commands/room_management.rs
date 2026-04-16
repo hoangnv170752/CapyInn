@@ -283,7 +283,7 @@ pub async fn delete_room_type(
 
 #[tauri::command]
 pub async fn export_csv(state: State<'_, AppState>) -> Result<String, String> {
-    let export_dir = app_identity::exports_dir();
+    let export_dir = app_identity::exports_dir_opt().ok_or("Cannot find home directory")?;
 
     std::fs::create_dir_all(&export_dir).map_err(|e| e.to_string())?;
 

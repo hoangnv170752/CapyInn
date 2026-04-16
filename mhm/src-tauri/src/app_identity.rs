@@ -7,29 +7,51 @@ pub const APP_GATEWAY_LOCKFILE: &str = ".gateway-port";
 pub const APP_BUNDLE_IDENTIFIER: &str = "io.capyinn.app";
 
 pub fn runtime_root() -> PathBuf {
-    dirs::home_dir()
-        .expect("Cannot find home directory")
-        .join(APP_RUNTIME_DIR)
+    runtime_root_opt().expect("Cannot find home directory")
+}
+
+pub fn runtime_root_opt() -> Option<PathBuf> {
+    dirs::home_dir().map(|home| home.join(APP_RUNTIME_DIR))
 }
 
 pub fn database_path() -> PathBuf {
     runtime_root().join(APP_DATABASE_FILENAME)
 }
 
+pub fn database_path_opt() -> Option<PathBuf> {
+    runtime_root_opt().map(|root| root.join(APP_DATABASE_FILENAME))
+}
+
 pub fn scans_dir() -> PathBuf {
     runtime_root().join("Scans")
+}
+
+pub fn scans_dir_opt() -> Option<PathBuf> {
+    runtime_root_opt().map(|root| root.join("Scans"))
 }
 
 pub fn models_dir() -> PathBuf {
     runtime_root().join("models")
 }
 
+pub fn models_dir_opt() -> Option<PathBuf> {
+    runtime_root_opt().map(|root| root.join("models"))
+}
+
 pub fn exports_dir() -> PathBuf {
     runtime_root().join("exports")
 }
 
+pub fn exports_dir_opt() -> Option<PathBuf> {
+    runtime_root_opt().map(|root| root.join("exports"))
+}
+
 pub fn gateway_lockfile() -> PathBuf {
     runtime_root().join(APP_GATEWAY_LOCKFILE)
+}
+
+pub fn gateway_lockfile_opt() -> Option<PathBuf> {
+    runtime_root_opt().map(|root| root.join(APP_GATEWAY_LOCKFILE))
 }
 
 #[cfg(test)]

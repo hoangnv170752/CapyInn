@@ -166,8 +166,8 @@ async fn gateway_get_status(
     state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let has_keys = gateway::auth::has_api_keys(&state.db).await;
-    let port = std::fs::read_to_string(app_identity::gateway_lockfile())
-        .ok()
+    let port = app_identity::gateway_lockfile_opt()
+        .and_then(|lockfile| std::fs::read_to_string(lockfile).ok())
         .and_then(|s| s.trim().parse::<u16>().ok());
 
     Ok(serde_json::json!({

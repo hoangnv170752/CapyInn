@@ -10,14 +10,17 @@ const VALID_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "tiff", "tif"];
 
 /// Start watching for new image files in Scans directory
 pub fn start_watcher(app_handle: AppHandle) -> Result<(), String> {
-    let candidates: Vec<PathBuf> = vec![
-        app_identity::scans_dir(),
-        std::env::current_dir().unwrap_or_default().join("Scans"),
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    if let Some(scans_dir) = app_identity::scans_dir_opt() {
+        candidates.push(scans_dir);
+    }
+    candidates.push(std::env::current_dir().unwrap_or_default().join("Scans"));
+    candidates.push(
         std::env::current_dir()
             .unwrap_or_default()
             .join("..")
             .join("Scans"),
-    ];
+    );
 
     let scans_dir = candidates
         .iter()

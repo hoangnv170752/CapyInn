@@ -15,13 +15,14 @@ pub async fn start_gateway(pool: Pool<Sqlite>, app_handle: AppHandle) -> Result<
     let port = server::start_server(pool, app_handle).await?;
 
     // Write port to lockfile
-    let lockfile = app_identity::gateway_lockfile();
-    if let Some(parent) = lockfile.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("Failed to create lockfile directory: {}", e))?;
+    if let Some(lockfile) = app_identity::gateway_lockfile_opt() {
+        if let Some(parent) = lockfile.parent() {
+            std::fs::create_dir_all(parent)
+                .map_err(|e| format!("Failed to create lockfile directory: {}", e))?;
+        }
+        std::fs::write(&lockfile, port.to_string())
+            .map_err(|e| format!("Failed to write lockfile: {}", e))?;
     }
-    std::fs::write(&lockfile, port.to_string())
-        .map_err(|e| format!("Failed to write lockfile: {}", e))?;
 
     eprintln!("MCP Gateway ready on :{}", port);
     Ok(port)
@@ -29,6 +30,7 @@ pub async fn start_gateway(pool: Pool<Sqlite>, app_handle: AppHandle) -> Result<
 
 /// Clean up the lockfile on shutdown
 pub fn cleanup_lockfile() {
-    let lockfile = app_identity::gateway_lockfile();
-    let _ = std::fs::remove_file(&lockfile);
+    if let Some(lockfile) = app_identity::gateway_lockfile_opt() {
+        let _ = std::fs::remove_file(&lockfile);
+    }
 }
