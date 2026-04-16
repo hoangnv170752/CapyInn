@@ -8,7 +8,7 @@ pub const APP_BUNDLE_IDENTIFIER: &str = "io.capyinn.app";
 
 pub fn runtime_root() -> PathBuf {
     dirs::home_dir()
-        .unwrap_or_default()
+        .expect("Cannot find home directory")
         .join(APP_RUNTIME_DIR)
 }
 
