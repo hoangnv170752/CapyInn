@@ -1,3 +1,4 @@
+pub mod audit_service;
 pub mod billing_service;
 pub mod group_lifecycle;
 pub mod guest_service;

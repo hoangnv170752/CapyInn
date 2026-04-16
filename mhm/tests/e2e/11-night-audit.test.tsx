@@ -42,18 +42,29 @@ describe("11 — Night Audit", () => {
 
     it("run_night_audit sends correct command", async () => {
         setMockResponse("run_night_audit", () => ({
+            id: "audit-1",
+            audit_date: "2026-03-15",
+            total_revenue: 1200000,
+            room_revenue: 800000,
+            folio_revenue: 400000,
+            total_expenses: 200000,
+            occupancy_pct: 30,
+            rooms_sold: 3,
             total_rooms: 10,
-            occupied_rooms: 3,
-            revenue_today: 1200000,
-            new_charges: 3,
-            auto_extended: 0,
-            discrepancies: [],
+            notes: null,
+            created_at: "2026-03-15T23:59:59+07:00",
         }));
 
         // Call directly through invoke
-        const result = await invoke("run_night_audit", { date: "2026-03-15" });
+        const result = await invoke("run_night_audit", {
+            auditDate: "2026-03-15",
+            notes: null,
+        });
 
-        expect(invoke).toHaveBeenCalledWith("run_night_audit", { date: "2026-03-15" });
+        expect(invoke).toHaveBeenCalledWith("run_night_audit", {
+            auditDate: "2026-03-15",
+            notes: null,
+        });
         expect(result).toHaveProperty("total_rooms", 10);
     });
 

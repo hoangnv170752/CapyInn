@@ -2,7 +2,7 @@
 
 Date: 2026-04-15
 Project: HotelManager / MHM
-Status: Approved in brainstorming, ready for implementation planning after spec review
+Status: Implemented for the planned Phase 1 booking-domain slice. Lifecycle, guest, group, billing-core, and read-side revenue/query boundaries are now in place; only non-critical follow-up cleanup remains.
 
 ## Goal
 
@@ -56,6 +56,33 @@ Phase 1 is intentionally narrowed to avoid turning the refactor into a rewrite.
 - full analytics rewrite
 - full audit/reporting service extraction
 - generic repository abstraction across the whole backend
+
+## Implementation Status Snapshot (2026-04-16)
+
+### Completed in codebase
+
+- Slice 1 foundation is in place: `domain/booking/error.rs`, `domain/booking/pricing.rs`, `services/booking/support.rs`, and service module wiring exist and are exercised by backend tests.
+- Slice 2 stay lifecycle is in place: `check_in`, `check_out`, and `extend_stay` now run through `services/booking/stay_lifecycle.rs`, with `commands/rooms.rs` acting as a thin transport adapter.
+- Slice 3 reservation lifecycle is in place: `create_reservation`, `confirm_reservation`, `modify_reservation`, and `cancel_reservation` now run through `services/booking/reservation_lifecycle.rs`, with `commands/reservations.rs` reduced to wrapper/gateway behavior.
+- Billing-core write ownership is in place for the implemented flows: shared helpers in `services/booking/billing_service.rs` own charge, payment, deposit, and cancellation-fee posting plus `bookings.paid_amount` cache synchronization.
+- Guest identity and assignment rules are isolated in `services/booking/guest_service.rs`, including placeholder defaults, guest reuse, and booking guest-link ownership.
+- Group check-in and checkout lifecycle orchestration is isolated in `services/booking/group_lifecycle.rs`, with `commands/groups.rs` reduced for the active lifecycle paths.
+- Read-side ownership is now in place: `queries/booking/*` and `repositories/booking/*` back dashboard revenue, statistics, analytics, folio reads, audit snapshots, and export rows.
+- `services/booking/audit_service.rs` now owns night-audit write orchestration, while `commands/billing.rs`, `commands/audit.rs`, `commands/analytics.rs`, and the revenue/stat helpers in `commands/rooms.rs` are transport adapters over shared query/service code.
+- Revenue semantics are unified for the phase-1 reporting surfaces: room revenue is recognized across the stay window from booking totals, ancillary revenue comes from `folio_lines`, retained-deposit revenue comes from `transactions.type = 'cancellation_fee'`, and payment/deposit flows remain cash-movement data instead of being reused as reporting revenue.
+- Backend verification exists for lifecycle, guest/group invariants, and the read-side revenue policy in `services/booking/tests.rs`. Mocked dashboard, analytics, room-detail, and night-audit frontend flows remain green.
+
+### Residual Follow-Up
+
+- `commands/groups.rs` still owns non-lifecycle helpers such as room auto-assignment, group service mutations, and invoice assembly. Those are now outside the critical booking-domain refactor path but can still be moved later if desired.
+- Reporting still uses a lean query layer instead of a larger report service. That is intentional for this phase; a broader reporting architecture rewrite remains out of scope.
+- The current revenue policy is stay-aware for room revenue, event-based for folio and cancellation-fee revenue, and explicitly separate from cash collection. If accounting needs become more sophisticated later, that should be treated as a separate product/accounting change rather than folded into this simplification refactor.
+
+### Recommended Next Order
+
+1. Decide whether non-lifecycle `groups.rs` helpers should move into their own service/query modules or simply stay as lightweight adapters.
+2. If reporting requirements grow, introduce a dedicated reporting service on top of the existing `queries/booking/*` layer instead of letting command SQL drift back in.
+3. Revisit revenue policy only if the business wants nightly accrual accounting; do not mix that change into ongoing simplification work.
 
 ## Refactor Strategy
 
@@ -456,4 +483,3 @@ Approved during brainstorming with the following final direction:
 - priority order is correctness boundary first, then domain boundary, then data boundary
 - phase 1 may change schema and command contracts when justified
 - phase 1 uses service-boundary refactor, narrowed after review to avoid rewrite risk
-

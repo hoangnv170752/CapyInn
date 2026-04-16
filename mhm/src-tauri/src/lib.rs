@@ -7,6 +7,8 @@ pub mod gateway;
 mod models;
 mod ocr;
 mod pricing;
+mod queries;
+mod repositories;
 mod services;
 mod watcher;
 
@@ -125,6 +127,7 @@ pub fn run() {
             commands::reservations::modify_reservation,
             commands::reservations::get_room_calendar,
             commands::reservations::get_rooms_availability,
+            commands::reservations::change_booking_room,
             // MCP Gateway
             gateway_generate_key,
             gateway_get_status,
@@ -153,14 +156,19 @@ pub fn run_proxy() {
 // ─── MCP Gateway Tauri Commands ───
 
 #[tauri::command]
-async fn gateway_generate_key(state: tauri::State<'_, AppState>, label: Option<String>) -> Result<String, String> {
+async fn gateway_generate_key(
+    state: tauri::State<'_, AppState>,
+    label: Option<String>,
+) -> Result<String, String> {
     let (key, hash) = gateway::auth::generate_api_key();
     gateway::auth::store_api_key(&state.db, &hash, label.as_deref().unwrap_or("default")).await?;
     Ok(key)
 }
 
 #[tauri::command]
-async fn gateway_get_status(state: tauri::State<'_, AppState>) -> Result<serde_json::Value, String> {
+async fn gateway_get_status(
+    state: tauri::State<'_, AppState>,
+) -> Result<serde_json::Value, String> {
     let has_keys = gateway::auth::has_api_keys(&state.db).await;
     let port = if let Some(home) = dirs::home_dir() {
         std::fs::read_to_string(home.join("MHM").join(".gateway-port"))

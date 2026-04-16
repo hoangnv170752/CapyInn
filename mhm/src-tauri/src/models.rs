@@ -249,6 +249,66 @@ pub struct RevenueStats {
     pub daily_revenue: Vec<DailyRevenue>,
 }
 
+#[derive(Debug, Serialize, Clone)]
+pub struct FolioLine {
+    pub id: String,
+    pub booking_id: String,
+    pub category: String,
+    pub description: String,
+    pub amount: f64,
+    pub created_by: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Serialize, Clone)]
+pub struct AuditLog {
+    pub id: String,
+    pub audit_date: String,
+    pub total_revenue: f64,
+    pub room_revenue: f64,
+    pub folio_revenue: f64,
+    pub total_expenses: f64,
+    pub occupancy_pct: f64,
+    pub rooms_sold: i32,
+    pub total_rooms: i32,
+    pub notes: Option<String>,
+    pub created_at: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct NightAuditSnapshot {
+    pub audit_date: String,
+    pub total_revenue: f64,
+    pub room_revenue: f64,
+    pub folio_revenue: f64,
+    pub total_expenses: f64,
+    pub occupancy_pct: f64,
+    pub rooms_sold: i32,
+    pub total_rooms: i32,
+}
+
+#[derive(Debug, Clone)]
+pub struct BookingExportRow {
+    pub id: String,
+    pub room_id: String,
+    pub guest_name: String,
+    pub doc_number: String,
+    pub phone: String,
+    pub check_in_at: String,
+    pub expected_checkout: String,
+    pub actual_checkout: String,
+    pub nights: i32,
+    pub room_price: f64,
+    pub charge_total: f64,
+    pub cancellation_fee_total: f64,
+    pub folio_total: f64,
+    pub recognized_revenue: f64,
+    pub paid_amount: f64,
+    pub status: String,
+    pub pricing_type: String,
+    pub source: String,
+}
+
 // --- Phase A: New DTOs ---
 
 #[derive(Debug, Serialize)]
@@ -412,6 +472,14 @@ pub struct ModifyReservationRequest {
     pub new_check_in_date: String,
     pub new_check_out_date: String,
     pub new_nights: i32,
+}
+
+#[derive(Debug, Deserialize)]
+#[allow(dead_code)]
+pub struct ChangeRoomRequest {
+    pub booking_id: String,
+    pub new_room_id: String,
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Serialize)]

@@ -1,8 +1,36 @@
 use sqlx::{Pool, Sqlite, Transaction};
 
 use crate::domain::booking::{BookingError, BookingResult};
+use crate::models::FolioLine;
+use crate::repositories::booking::folio_repository;
 
 use super::support::{begin_tx, rfc3339_now};
+
+pub async fn add_folio_line(
+    pool: &Pool<Sqlite>,
+    booking_id: &str,
+    category: &str,
+    description: &str,
+    amount: f64,
+    created_by: Option<&str>,
+) -> BookingResult<FolioLine> {
+    if amount <= 0.0 {
+        return Err(BookingError::validation(
+            "Folio amount must be greater than zero",
+        ));
+    }
+
+    folio_repository::insert_folio_line(
+        pool,
+        booking_id,
+        category,
+        description,
+        amount,
+        created_by,
+        &rfc3339_now(),
+    )
+    .await
+}
 
 pub async fn record_charge(
     pool: &Pool<Sqlite>,
@@ -38,16 +66,7 @@ pub async fn record_charge_tx(
     note: impl Into<String>,
     created_at: impl Into<String>,
 ) -> BookingResult<()> {
-    record_money_tx(
-        tx,
-        booking_id,
-        amount,
-        note,
-        "charge",
-        created_at,
-        false,
-    )
-    .await
+    record_money_tx(tx, booking_id, amount, note, "charge", created_at, false).await
 }
 
 pub async fn record_payment_tx(
@@ -56,16 +75,7 @@ pub async fn record_payment_tx(
     amount: f64,
     note: impl Into<String>,
 ) -> BookingResult<()> {
-    record_money_tx(
-        tx,
-        booking_id,
-        amount,
-        note,
-        "payment",
-        rfc3339_now(),
-        true,
-    )
-    .await
+    record_money_tx(tx, booking_id, amount, note, "payment", rfc3339_now(), true).await
 }
 
 pub async fn record_deposit_tx(
@@ -74,16 +84,7 @@ pub async fn record_deposit_tx(
     amount: f64,
     note: impl Into<String>,
 ) -> BookingResult<()> {
-    record_money_tx(
-        tx,
-        booking_id,
-        amount,
-        note,
-        "deposit",
-        rfc3339_now(),
-        true,
-    )
-    .await
+    record_money_tx(tx, booking_id, amount, note, "deposit", rfc3339_now(), true).await
 }
 
 pub async fn record_cancellation_fee_tx(

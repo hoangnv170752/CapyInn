@@ -8,11 +8,14 @@ use crate::{
         CheckInRequest, CheckOutRequest, CreateGuestRequest, CreateReservationRequest,
         GroupCheckinRequest, GroupCheckoutRequest,
     },
+    queries::booking::{audit_queries, billing_queries, revenue_queries},
 };
 
 use super::{
+    audit_service,
     billing_service::{
-        record_cancellation_fee_tx, record_deposit_tx, record_payment, record_payment_tx,
+        add_folio_line, record_cancellation_fee_tx, record_deposit_tx, record_payment,
+        record_payment_tx,
     },
     group_lifecycle, guest_service, reservation_lifecycle, stay_lifecycle,
 };
@@ -94,6 +97,7 @@ pub async fn test_pool() -> Pool<Sqlite> {
             scheduled_checkout TEXT,
             group_id TEXT REFERENCES booking_groups(id),
             is_master_room INTEGER NOT NULL DEFAULT 0,
+            is_audited INTEGER NOT NULL DEFAULT 0,
             pricing_snapshot TEXT,
             created_at TEXT NOT NULL
         )",
@@ -207,6 +211,55 @@ pub async fn test_pool() -> Pool<Sqlite> {
     .execute(&pool)
     .await
     .expect("failed to create special_dates table");
+
+    sqlx::query(
+        "CREATE TABLE expenses (
+            id TEXT PRIMARY KEY,
+            category TEXT NOT NULL,
+            amount REAL NOT NULL,
+            note TEXT,
+            expense_date TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("failed to create expenses table");
+
+    sqlx::query(
+        "CREATE TABLE folio_lines (
+            id TEXT PRIMARY KEY,
+            booking_id TEXT NOT NULL REFERENCES bookings(id),
+            category TEXT NOT NULL,
+            description TEXT NOT NULL,
+            amount REAL NOT NULL,
+            created_by TEXT,
+            created_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("failed to create folio_lines table");
+
+    sqlx::query(
+        "CREATE TABLE night_audit_logs (
+            id TEXT PRIMARY KEY,
+            audit_date TEXT NOT NULL UNIQUE,
+            total_revenue REAL NOT NULL DEFAULT 0,
+            room_revenue REAL NOT NULL DEFAULT 0,
+            folio_revenue REAL NOT NULL DEFAULT 0,
+            total_expenses REAL NOT NULL DEFAULT 0,
+            occupancy_pct REAL NOT NULL DEFAULT 0,
+            rooms_sold INTEGER NOT NULL DEFAULT 0,
+            total_rooms INTEGER NOT NULL DEFAULT 0,
+            notes TEXT,
+            created_by TEXT,
+            created_at TEXT NOT NULL
+        )",
+    )
+    .execute(&pool)
+    .await
+    .expect("failed to create night_audit_logs table");
 
     pool
 }
@@ -462,6 +515,71 @@ pub fn minimal_checkin_request(room_id: &str) -> CheckInRequest {
         paid_amount: None,
         pricing_type: Some("nightly".to_string()),
     }
+}
+
+pub async fn seed_transaction(
+    pool: &Pool<Sqlite>,
+    booking_id: &str,
+    amount: f64,
+    txn_type: &str,
+    note: &str,
+    created_at: &str,
+) -> BookingResult<()> {
+    sqlx::query(
+        "INSERT INTO transactions (id, booking_id, amount, type, note, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(booking_id)
+    .bind(amount)
+    .bind(txn_type)
+    .bind(note)
+    .bind(created_at)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn seed_folio_line(
+    pool: &Pool<Sqlite>,
+    booking_id: &str,
+    amount: f64,
+    created_at: &str,
+) -> BookingResult<()> {
+    sqlx::query(
+        "INSERT INTO folio_lines (id, booking_id, category, description, amount, created_by, created_at)
+         VALUES (?, ?, 'mini-bar', 'Seed folio', ?, 'seed-user', ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(booking_id)
+    .bind(amount)
+    .bind(created_at)
+    .execute(pool)
+    .await?;
+
+    Ok(())
+}
+
+pub async fn seed_expense(
+    pool: &Pool<Sqlite>,
+    category: &str,
+    amount: f64,
+    expense_date: &str,
+) -> BookingResult<()> {
+    sqlx::query(
+        "INSERT INTO expenses (id, category, amount, note, expense_date, created_at)
+         VALUES (?, ?, ?, 'Seed expense', ?, ?)",
+    )
+    .bind(uuid::Uuid::new_v4().to_string())
+    .bind(category)
+    .bind(amount)
+    .bind(expense_date)
+    .bind(format!("{}T22:00:00+07:00", expense_date))
+    .execute(pool)
+    .await?;
+
+    Ok(())
 }
 
 pub fn minimal_reservation_request(room_id: &str) -> CreateReservationRequest {
@@ -741,7 +859,10 @@ async fn group_checkin_rejects_duplicate_room_ids() {
     .await
     .unwrap_err();
 
-    assert_eq!(error.to_string(), "Phòng không được lặp trong cùng một group");
+    assert_eq!(
+        error.to_string(),
+        "Phòng không được lặp trong cùng một group"
+    );
 }
 
 #[tokio::test]
@@ -843,7 +964,10 @@ async fn group_checkout_clears_master_flag_when_group_completes() {
             .fetch_one(&pool)
             .await
             .unwrap();
-    assert_eq!(group_row.get::<Option<String>, _>("master_booking_id"), None);
+    assert_eq!(
+        group_row.get::<Option<String>, _>("master_booking_id"),
+        None
+    );
     assert_eq!(group_row.get::<String, _>("status"), "completed");
 
     let booking_row = sqlx::query("SELECT is_master_room FROM bookings WHERE id = ?")
@@ -1699,4 +1823,239 @@ async fn extend_stay_uses_existing_expected_checkout() {
     .await
     .unwrap();
     assert_eq!(charge.get::<f64, _>("amount"), 250_000.0);
+}
+
+#[tokio::test]
+async fn revenue_queries_use_recognized_room_revenue_and_ignore_payments() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R301").await.unwrap();
+    seed_active_booking(&pool, "B301", "R301").await.unwrap();
+    seed_transaction(
+        &pool,
+        "B301",
+        250_000.0,
+        "charge",
+        "Room charge",
+        "2026-04-15T10:00:00+07:00",
+    )
+    .await
+    .unwrap();
+    seed_transaction(
+        &pool,
+        "B301",
+        120_000.0,
+        "payment",
+        "Cash received",
+        "2026-04-15T10:05:00+07:00",
+    )
+    .await
+    .unwrap();
+    seed_folio_line(&pool, "B301", 50_000.0, "2026-04-15T11:00:00+07:00")
+        .await
+        .unwrap();
+
+    let dashboard = revenue_queries::load_dashboard_stats_for_date(&pool, "2026-04-15")
+        .await
+        .unwrap();
+    let stats = revenue_queries::load_revenue_stats(
+        &pool,
+        "2026-04-15T00:00:00+07:00",
+        "2026-04-15T23:59:59+07:00",
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(dashboard.revenue_today, 300_000.0);
+    assert_eq!(stats.total_revenue, 300_000.0);
+    assert_eq!(stats.rooms_sold, 1);
+    assert_eq!(stats.daily_revenue.len(), 1);
+    assert_eq!(stats.daily_revenue[0].date, "2026-04-15");
+    assert_eq!(stats.daily_revenue[0].revenue, 300_000.0);
+}
+
+#[tokio::test]
+async fn analytics_breakdowns_reconcile_to_total_revenue() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R302").await.unwrap();
+    seed_active_booking(&pool, "B302", "R302").await.unwrap();
+    seed_transaction(
+        &pool,
+        "B302",
+        250_000.0,
+        "charge",
+        "Room charge",
+        "2026-04-15T10:00:00+07:00",
+    )
+    .await
+    .unwrap();
+    seed_folio_line(&pool, "B302", 25_000.0, "2026-04-15T12:00:00+07:00")
+        .await
+        .unwrap();
+
+    let analytics = revenue_queries::load_analytics(&pool, "2026-04-15", "2026-04-15", 1)
+        .await
+        .unwrap();
+
+    assert_eq!(analytics.total_revenue, 275_000.0);
+    assert_eq!(analytics.occupancy_rate, 100.0);
+    assert_eq!(analytics.adr, 250_000.0);
+    assert_eq!(analytics.revpar, 250_000.0);
+    assert_eq!(analytics.daily_revenue.len(), 1);
+    assert_eq!(analytics.revenue_by_source.len(), 1);
+    assert_eq!(analytics.revenue_by_source[0].name, "walk-in");
+    assert_eq!(analytics.revenue_by_source[0].value, 275_000.0);
+    assert_eq!(analytics.top_rooms.len(), 1);
+    assert_eq!(analytics.top_rooms[0].room, "R302");
+    assert_eq!(analytics.top_rooms[0].revenue, 275_000.0);
+}
+
+#[tokio::test]
+async fn revenue_queries_include_cancellation_fees_in_recognized_revenue() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R305").await.unwrap();
+    seed_booked_reservation(&pool, "B305", "R305")
+        .await
+        .unwrap();
+    sqlx::query("UPDATE bookings SET status = 'cancelled' WHERE id = ?")
+        .bind("B305")
+        .execute(&pool)
+        .await
+        .unwrap();
+    seed_transaction(
+        &pool,
+        "B305",
+        50_000.0,
+        "cancellation_fee",
+        "Retained deposit",
+        "2026-04-15T14:00:00+07:00",
+    )
+    .await
+    .unwrap();
+
+    let stats = revenue_queries::load_revenue_stats(
+        &pool,
+        "2026-04-15T00:00:00+07:00",
+        "2026-04-15T23:59:59+07:00",
+    )
+    .await
+    .unwrap();
+    let export_rows = audit_queries::load_booking_export_rows(&pool, "2026-04-01", "2026-04-30")
+        .await
+        .unwrap();
+    let cancelled_row = export_rows.iter().find(|row| row.id == "B305").unwrap();
+
+    assert_eq!(stats.total_revenue, 50_000.0);
+    assert_eq!(cancelled_row.charge_total, 0.0);
+    assert_eq!(cancelled_row.cancellation_fee_total, 50_000.0);
+    assert_eq!(cancelled_row.recognized_revenue, 50_000.0);
+}
+
+#[tokio::test]
+async fn run_night_audit_uses_canonical_room_and_folio_revenue() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R303").await.unwrap();
+    seed_active_booking(&pool, "B303", "R303").await.unwrap();
+    sqlx::query(
+        "UPDATE bookings
+         SET nights = 2, total_price = 500000, expected_checkout = '2026-04-17T10:00:00+07:00'
+         WHERE id = ?",
+    )
+    .bind("B303")
+    .execute(&pool)
+    .await
+    .unwrap();
+    seed_transaction(
+        &pool,
+        "B303",
+        500_000.0,
+        "charge",
+        "Room charge",
+        "2026-04-15T10:00:00+07:00",
+    )
+    .await
+    .unwrap();
+    seed_transaction(
+        &pool,
+        "B303",
+        90_000.0,
+        "payment",
+        "Cash received",
+        "2026-04-16T10:05:00+07:00",
+    )
+    .await
+    .unwrap();
+    seed_folio_line(&pool, "B303", 40_000.0, "2026-04-16T13:00:00+07:00")
+        .await
+        .unwrap();
+    seed_expense(&pool, "electricity", 10_000.0, "2026-04-16")
+        .await
+        .unwrap();
+
+    let log = audit_service::run_night_audit(
+        &pool,
+        "2026-04-16",
+        Some("Checked and closed".to_string()),
+        "admin-1",
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(log.audit_date, "2026-04-16");
+    assert_eq!(log.room_revenue, 250_000.0);
+    assert_eq!(log.folio_revenue, 40_000.0);
+    assert_eq!(log.total_revenue, 290_000.0);
+    assert_eq!(log.total_expenses, 10_000.0);
+    assert_eq!(log.rooms_sold, 1);
+    assert_eq!(log.total_rooms, 1);
+
+    let audited: i32 = sqlx::query_scalar("SELECT is_audited FROM bookings WHERE id = ?")
+        .bind("B303")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(audited, 1);
+}
+
+#[tokio::test]
+async fn billing_and_export_queries_preserve_canonical_revenue_columns() {
+    let pool = test_pool().await;
+    seed_room(&pool, "R304").await.unwrap();
+    seed_active_booking(&pool, "B304", "R304").await.unwrap();
+    seed_transaction(
+        &pool,
+        "B304",
+        250_000.0,
+        "charge",
+        "Room charge",
+        "2026-04-15T10:00:00+07:00",
+    )
+    .await
+    .unwrap();
+
+    let line = add_folio_line(
+        &pool,
+        "B304",
+        "laundry",
+        "Laundry bundle",
+        35_000.0,
+        Some("staff-1"),
+    )
+    .await
+    .unwrap();
+    let folio_lines = billing_queries::list_folio_lines(&pool, "B304")
+        .await
+        .unwrap();
+    let export_rows = audit_queries::load_booking_export_rows(&pool, "2026-04-01", "2026-04-30")
+        .await
+        .unwrap();
+
+    assert_eq!(line.amount, 35_000.0);
+    assert_eq!(folio_lines.len(), 1);
+    assert_eq!(folio_lines[0].category, "laundry");
+    assert_eq!(export_rows.len(), 1);
+    assert_eq!(export_rows[0].room_price, 250_000.0);
+    assert_eq!(export_rows[0].charge_total, 250_000.0);
+    assert_eq!(export_rows[0].cancellation_fee_total, 0.0);
+    assert_eq!(export_rows[0].folio_total, 35_000.0);
+    assert_eq!(export_rows[0].recognized_revenue, 285_000.0);
 }
