@@ -10,7 +10,6 @@ import {
     LogOut,
     Play,
     Sparkles,
-    User,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -18,6 +17,7 @@ import InvoiceDialog from "@/components/InvoiceDialog";
 import type { InvoiceData } from "@/components/InvoicePDF";
 import InfoItem from "@/components/shared/InfoItem";
 import ActionBtn from "@/components/shared/ActionBtn";
+import RoomGuestsSection from "@/components/shared/RoomGuestsSection";
 import Section from "@/components/shared/Section";
 import StatusBadge from "@/components/shared/StatusBadge";
 import SlideDrawer from "@/components/shared/SlideDrawer";
@@ -174,22 +174,7 @@ export default function RoomDrawer({ open, onClose, roomId }: RoomDrawerProps) {
 
     // ── Content Sections ───────────────────────────────
 
-    const guestSection =
-        guests.length > 0 ? (
-            <Section icon={User} title={"Khách hàng (" + guests.length + ")"}>
-                <div className="space-y-2">
-                    {guests.map((guest) => (
-                        <div key={guest.id} className="bg-white border border-slate-100 rounded-xl p-3">
-                            <div className="font-semibold text-sm text-slate-900">{guest.full_name}</div>
-                            <div className="flex items-center justify-between mt-1.5 text-xs text-brand-muted">
-                                <span className="font-mono">{guest.doc_number}</span>
-                                <span>{guest.nationality || "VN"}</span>
-                            </div>
-                        </div>
-                    ))}
-                </div>
-            </Section>
-        ) : null;
+    const guestSection = <RoomGuestsSection guests={guests} mode="sheet" />;
 
     const paymentStatusClass =
         booking && booking.paid_amount >= booking.total_price
