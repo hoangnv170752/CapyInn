@@ -4,11 +4,12 @@ pub mod proxy;
 pub mod server;
 pub mod tools;
 
+use log::info;
 use sqlx::{Pool, Sqlite};
-use tauri::AppHandle;
 use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::time::Duration;
+use tauri::AppHandle;
 
 use crate::app_identity;
 
@@ -27,7 +28,7 @@ pub async fn start_gateway(
         write_lockfile(&lockfile, running_gateway.port)?;
     }
 
-    eprintln!("MCP Gateway ready on :{}", running_gateway.port);
+    info!("MCP Gateway ready on :{}", running_gateway.port);
     Ok(running_gateway)
 }
 

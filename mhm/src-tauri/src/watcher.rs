@@ -1,3 +1,4 @@
+use log::{error, info, warn};
 use notify::{Config, Event, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use std::path::{Path, PathBuf};
 use std::thread;
@@ -35,11 +36,11 @@ pub fn start_watcher(app_handle: AppHandle) -> Result<(), String> {
 
     thread::spawn(move || {
         if let Err(e) = run_watcher(scans_path, app_handle) {
-            eprintln!("File watcher error: {}", e);
+            error!("File watcher error: {}", e);
         }
     });
 
-    println!("File watcher started on: {}", scans_dir.display());
+    info!("File watcher started on: {}", scans_dir.display());
     Ok(())
 }
 
@@ -64,7 +65,7 @@ fn run_watcher(scans_dir: PathBuf, app_handle: AppHandle) -> Result<(), String> 
     let engine = match ocr::create_engine() {
         Ok(e) => e,
         Err(e) => {
-            eprintln!(
+            warn!(
                 "OCR engine not available: {}. Watcher running without OCR.",
                 e
             );
@@ -74,23 +75,23 @@ fn run_watcher(scans_dir: PathBuf, app_handle: AppHandle) -> Result<(), String> 
         }
     };
 
-    println!("OCR engine ready. Waiting for scans...");
+    info!("OCR engine ready. Waiting for scans...");
 
     for event in rx {
         if matches!(event.kind, EventKind::Create(_)) {
             for path in event.paths {
                 if is_valid_image(&path) {
                     thread::sleep(std::time::Duration::from_millis(500));
-                    println!("New scan detected: {}", path.display());
+                    info!("New scan detected: {}", path.display());
 
                     match ocr::ocr_image(&engine, &path) {
                         Ok(lines) => {
                             let cccd = ocr::parse_cccd(&lines);
-                            println!("OCR result: {:?}", cccd);
+                            info!("OCR result extracted for {}", path.display());
                             let _ = app_handle.emit("ocr-result", &cccd);
                         }
                         Err(e) => {
-                            eprintln!("OCR failed for {}: {}", path.display(), e);
+                            error!("OCR failed for {}: {}", path.display(), e);
                             let _ = app_handle.emit("ocr-error", &e);
                         }
                     }

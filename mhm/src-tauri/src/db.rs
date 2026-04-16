@@ -1,3 +1,4 @@
+use log::warn;
 use sqlx::{Pool, Row, Sqlite, SqlitePool, Transaction};
 
 use crate::app_identity;
@@ -89,7 +90,7 @@ async fn execute_compat_alter(
     match sqlx::query(sql).execute(&mut **tx).await {
         Ok(_) => Ok(()),
         Err(error) if is_duplicate_column_error(&error) => {
-            eprintln!("Ignoring compatibility migration '{}': {}", sql, error);
+            warn!("Ignoring compatibility migration '{}': {}", sql, error);
             Ok(())
         }
         Err(error) => Err(error),

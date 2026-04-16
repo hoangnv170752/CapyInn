@@ -1,4 +1,5 @@
 use axum::Router;
+use log::error;
 use rmcp::transport::streamable_http_server::session::local::LocalSessionManager;
 use rmcp::transport::streamable_http_server::{StreamableHttpService, StreamableHttpServerConfig};
 use sqlx::{Pool, Sqlite};
@@ -68,7 +69,7 @@ pub async fn start_server(
             })
             .await
         {
-            eprintln!("MCP Gateway server error: {}", e);
+            error!("MCP Gateway server error: {}", e);
         }
     });
 

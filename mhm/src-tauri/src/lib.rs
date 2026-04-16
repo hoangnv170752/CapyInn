@@ -1,4 +1,5 @@
 use tauri::Manager;
+use log::{error, info};
 
 pub mod app_identity;
 mod commands;
@@ -14,8 +15,10 @@ mod services;
 mod watcher;
 
 use commands::AppState;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, Once};
 use std::time::Duration;
+
+static LOG_INIT: Once = Once::new();
 
 struct GatewayRuntimeState {
     runtime: Mutex<Option<tokio::runtime::Runtime>>,
@@ -60,9 +63,19 @@ impl GatewayRuntimeState {
     }
 }
 
+fn init_logging() {
+    LOG_INIT.call_once(|| {
+        let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+            .format_timestamp_secs()
+            .try_init();
+    });
+}
+
 /// Run the Tauri GUI application with MCP Gateway
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
+    init_logging();
+
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -77,11 +90,11 @@ pub fn run() {
             let gateway_runtime = rt.block_on(async {
                 match gateway::start_gateway(gateway_pool, gateway_handle).await {
                     Ok(gateway) => {
-                        eprintln!("MCP Gateway started on port {}", gateway.port);
+                        info!("MCP Gateway started on port {}", gateway.port);
                         Some(gateway)
                     }
                     Err(e) => {
-                        eprintln!("Failed to start MCP Gateway: {}", e);
+                        error!("Failed to start MCP Gateway: {}", e);
                         None
                     }
                 }
@@ -99,7 +112,7 @@ pub fn run() {
             let handle = app.handle().clone();
             std::thread::spawn(move || {
                 if let Err(e) = watcher::start_watcher(handle) {
-                    eprintln!("Failed to start file watcher: {}", e);
+                    error!("Failed to start file watcher: {}", e);
                 }
             });
 
@@ -198,6 +211,7 @@ pub fn run() {
 
 /// Run the MCP stdio proxy (Process B)
 pub fn run_proxy() {
+    init_logging();
     gateway::proxy::run_proxy();
 }
 

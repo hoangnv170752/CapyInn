@@ -1,3 +1,4 @@
+use log::info;
 use ocr_rs::{Backend, OcrEngine, OcrEngineConfig};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -50,7 +51,7 @@ pub fn find_models_dir() -> Result<PathBuf, String> {
 /// Create OcrEngine with Metal backend
 pub fn create_engine() -> Result<OcrEngine, String> {
     let models_dir = find_models_dir()?;
-    println!("Loading OCR models from: {}", models_dir.display());
+    info!("Loading OCR models from: {}", models_dir.display());
 
     let det_path = models_dir.join("PP-OCRv5_mobile_det.mnn");
     let rec_path = models_dir.join("PP-OCRv5_mobile_rec.mnn");
@@ -66,7 +67,7 @@ pub fn create_engine() -> Result<OcrEngine, String> {
     )
     .map_err(|e| format!("Failed to create OCR engine: {}", e))?;
 
-    println!("OCR engine ready (Metal backend)");
+    info!("OCR engine ready (Metal backend)");
     Ok(engine)
 }
 
