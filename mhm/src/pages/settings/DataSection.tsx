@@ -4,15 +4,23 @@ import { FolderOpen } from "lucide-react";
 import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
+import { useAuthStore } from "@/stores/useAuthStore";
 
 export default function DataSection() {
+  const canManageData = useAuthStore((state) => state.user?.role === "admin");
   const [exporting, setExporting] = useState(false);
+  const [backingUp, setBackingUp] = useState(false);
   const [exportPath, setExportPath] = useState<string | null>(null);
+  const [backupPath, setBackupPath] = useState<string | null>(null);
 
   const handleExport = async () => {
+    if (!canManageData) {
+      return;
+    }
+
     setExporting(true);
     try {
-      const path = await invoke<string>("export_csv");
+      const path = await invoke<string>("export_bookings_csv");
       setExportPath(path);
       toast.success("Xuất CSV thành công!");
     } catch (error) {
@@ -20,6 +28,24 @@ export default function DataSection() {
       toast.error("Lỗi xuất CSV!");
     } finally {
       setExporting(false);
+    }
+  };
+
+  const handleBackup = async () => {
+    if (!canManageData) {
+      return;
+    }
+
+    setBackingUp(true);
+    try {
+      const path = await invoke<string>("backup_database");
+      setBackupPath(path);
+      toast.success("Sao lưu Database thành công!");
+    } catch (error) {
+      console.error(error);
+      toast.error("Lỗi sao lưu Database!");
+    } finally {
+      setBackingUp(false);
     }
   };
 
@@ -41,7 +67,12 @@ export default function DataSection() {
               </p>
             )}
           </div>
-          <Button variant="outline" className="rounded-xl" onClick={() => void handleExport()} disabled={exporting}>
+          <Button
+            variant="outline"
+            className="rounded-xl"
+            onClick={() => void handleExport()}
+            disabled={!canManageData || exporting}
+          >
             {exporting ? "Đang xuất..." : "Export CSV"}
           </Button>
         </div>
@@ -50,21 +81,41 @@ export default function DataSection() {
           <div>
             <p className="font-medium text-sm">Sao lưu Database</p>
             <p className="text-xs text-brand-muted">Tạo bản sao lưu file SQLite</p>
+            {backupPath && (
+              <p className="text-xs text-emerald-600 mt-1 flex items-center gap-1">
+                <FolderOpen size={12} /> {backupPath}
+              </p>
+            )}
           </div>
-          <Button variant="outline" className="rounded-xl">
-            Backup
+          <Button
+            variant="outline"
+            className="rounded-xl"
+            onClick={() => void handleBackup()}
+            disabled={!canManageData || backingUp}
+          >
+            {backingUp ? "Đang sao lưu..." : "Backup"}
           </Button>
         </div>
 
         <div className="flex items-center justify-between p-4 bg-red-50 rounded-xl">
           <div>
             <p className="font-medium text-sm text-red-700">Xóa toàn bộ dữ liệu</p>
-            <p className="text-xs text-red-500">Hành động này không thể hoàn tác!</p>
+            <p className="text-xs text-red-500">Chưa hỗ trợ trong phiên bản hiện tại.</p>
           </div>
-          <Button variant="outline" className="rounded-xl border-red-200 text-red-600 hover:bg-red-100">
+          <Button
+            variant="outline"
+            className="rounded-xl border-red-200 text-red-600 hover:bg-red-100"
+            disabled
+          >
             Reset
           </Button>
         </div>
+
+        {!canManageData && (
+          <p className="text-xs text-brand-muted">
+            Chỉ tài khoản admin mới có thể export, backup, hoặc thay đổi dữ liệu nhạy cảm.
+          </p>
+        )}
       </div>
     </div>
   );

@@ -6,17 +6,20 @@ import { setMockResponse, clearMockResponses, invoke } from "@test-mocks/tauri-c
 import { useAuthStore } from "@/stores/useAuthStore";
 
 describe("08 — Settings", () => {
-    beforeEach(() => {
-        clearMockResponses();
-        invoke.mockClear();
-
-        // Set admin auth state so admin-only sections render
+    const setAuthenticatedUser = (role: "admin" | "receptionist" = "admin") => {
         useAuthStore.setState({
-            user: { id: "u1", name: "Admin", role: "admin", active: true, created_at: "" },
+            user: { id: "u1", name: "Admin", role, active: true, created_at: "" },
             isAuthenticated: true,
             loading: false,
             error: null,
         });
+    };
+
+    beforeEach(() => {
+        clearMockResponses();
+        invoke.mockClear();
+
+        setAuthenticatedUser();
 
         setMockResponse("get_settings", (args: unknown) => {
             const key = (args as { key: string }).key;
@@ -100,5 +103,54 @@ describe("08 — Settings", () => {
         await waitFor(() => {
             expect(invoke).toHaveBeenCalledWith("list_users");
         });
+    });
+
+    it("uses the hardened export and backup actions for admin users", async () => {
+        setMockResponse("export_bookings_csv", () => "/tmp/bookings.csv");
+        setMockResponse("backup_database", () => "/tmp/capyinn-backup.db");
+
+        const user = userEvent.setup();
+        render(<Settings />);
+
+        await user.click(screen.getByText("Data & Backup"));
+        await user.click(screen.getByRole("button", { name: "Export CSV" }));
+        await user.click(screen.getByRole("button", { name: "Backup" }));
+
+        await waitFor(() => {
+            expect(invoke).toHaveBeenCalledWith("export_bookings_csv");
+            expect(invoke).toHaveBeenCalledWith("backup_database");
+        });
+    });
+
+    it("disables sensitive data actions for non-admin users", async () => {
+        setAuthenticatedUser("receptionist");
+
+        const user = userEvent.setup();
+        render(<Settings />);
+
+        await user.click(screen.getByText("Data & Backup"));
+
+        expect(screen.getByRole("button", { name: "Export CSV" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Backup" })).toBeDisabled();
+        expect(screen.getByRole("button", { name: "Reset" })).toBeDisabled();
+        expect(
+            screen.getByText(/Chỉ tài khoản admin mới có thể export, backup/i),
+        ).toBeInTheDocument();
+    });
+
+    it("disables API key generation for non-admin users", async () => {
+        setAuthenticatedUser("receptionist");
+
+        const user = userEvent.setup();
+        render(<Settings />);
+
+        await user.click(screen.getByText("MCP Gateway"));
+
+        await waitFor(() => {
+            expect(screen.getByRole("button", { name: "Tạo API Key" })).toBeDisabled();
+        });
+        expect(
+            screen.getByText(/Chỉ admin mới có thể tạo API key mới/i),
+        ).toBeInTheDocument();
     });
 });

@@ -208,6 +208,8 @@ async fn gateway_generate_key(
     state: tauri::State<'_, AppState>,
     label: Option<String>,
 ) -> Result<String, String> {
+    commands::require_admin(&state)?;
+
     let (key, hash) = gateway::auth::generate_api_key();
     gateway::auth::store_api_key(&state.db, &hash, label.as_deref().unwrap_or("default")).await?;
     Ok(key)

@@ -6,9 +6,11 @@ import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { APP_API_KEY_PREFIX, APP_NAME } from "@/lib/appIdentity";
+import { useAuthStore } from "@/stores/useAuthStore";
 import type { GatewayStatus } from "@/types";
 
 export default function GatewaySection() {
+  const canManageGateway = useAuthStore((state) => state.user?.role === "admin");
   const [status, setStatus] = useState<GatewayStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [apiKey, setApiKey] = useState<string | null>(null);
@@ -100,10 +102,23 @@ export default function GatewaySection() {
           API Key
         </h4>
         <p className="text-xs text-brand-muted">API key dùng để xác thực AI agent khi kết nối. Mỗi key chỉ hiển thị 1 lần sau khi tạo.</p>
+        {!canManageGateway && (
+          <p className="text-xs text-brand-muted">Chỉ admin mới có thể tạo API key mới.</p>
+        )}
 
         <div className="flex items-center gap-2">
-          <Input value={label} onChange={(event) => setLabel(event.target.value)} placeholder="Label (VD: zeroclaw, claude)" className="w-48" />
-          <Button onClick={() => void handleGenerate()} disabled={generating} className="bg-brand-primary text-white rounded-xl">
+          <Input
+            value={label}
+            onChange={(event) => setLabel(event.target.value)}
+            placeholder="Label (VD: zeroclaw, claude)"
+            className="w-48"
+            disabled={!canManageGateway}
+          />
+          <Button
+            onClick={() => void handleGenerate()}
+            disabled={!canManageGateway || generating}
+            className="bg-brand-primary text-white rounded-xl"
+          >
             {generating ? "Đang tạo..." : "Tạo API Key"}
           </Button>
         </div>

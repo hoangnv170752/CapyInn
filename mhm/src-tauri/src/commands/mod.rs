@@ -26,12 +26,16 @@ pub(crate) fn get_user_id(state: &State<'_, AppState>) -> Option<String> {
     get_user(state).map(|u| u.id)
 }
 
-pub(crate) fn require_admin(state: &State<'_, AppState>) -> Result<User, String> {
-    let user = get_user(state).ok_or("Chưa đăng nhập".to_string())?;
+pub(crate) fn require_admin_user(user: Option<User>) -> Result<User, String> {
+    let user = user.ok_or("Chưa đăng nhập".to_string())?;
     if user.role != "admin" {
         return Err("Không có quyền thực hiện. Yêu cầu quyền Admin.".to_string());
     }
     Ok(user)
+}
+
+pub(crate) fn require_admin(state: &State<'_, AppState>) -> Result<User, String> {
+    require_admin_user(get_user(state))
 }
 
 pub(crate) fn emit_db_update(app: &tauri::AppHandle, entity: &str) {
@@ -63,3 +67,38 @@ pub use room_management::do_get_room_types;
 pub use pricing::{do_get_pricing_rules, do_calculate_price_preview};
 pub use reservations::{do_check_availability, do_create_reservation, do_cancel_reservation, do_modify_reservation, do_get_rooms_availability};
 pub use invoices::do_generate_invoice;
+
+#[cfg(test)]
+mod tests {
+    use super::require_admin_user;
+    use crate::models::User;
+
+    fn mock_user(role: &str) -> User {
+        User {
+            id: "u1".to_string(),
+            name: "Test".to_string(),
+            role: role.to_string(),
+            active: true,
+            created_at: "2026-01-01T00:00:00Z".to_string(),
+        }
+    }
+
+    #[test]
+    fn require_admin_user_rejects_missing_user() {
+        let error = require_admin_user(None).expect_err("missing user must be rejected");
+        assert_eq!(error, "Chưa đăng nhập");
+    }
+
+    #[test]
+    fn require_admin_user_rejects_non_admin_user() {
+        let error =
+            require_admin_user(Some(mock_user("receptionist"))).expect_err("non-admin must fail");
+        assert_eq!(error, "Không có quyền thực hiện. Yêu cầu quyền Admin.");
+    }
+
+    #[test]
+    fn require_admin_user_accepts_admin_user() {
+        let user = require_admin_user(Some(mock_user("admin"))).expect("admin must pass");
+        assert_eq!(user.role, "admin");
+    }
+}

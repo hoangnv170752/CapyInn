@@ -38,7 +38,9 @@ pub async fn get_audit_logs(
 // ═══════════════════════════════════════════════
 
 #[tauri::command]
-pub async fn backup_database() -> Result<String, String> {
+pub async fn backup_database(state: State<'_, AppState>) -> Result<String, String> {
+    require_admin(&state)?;
+
     let db_dir = app_identity::runtime_root_opt().ok_or("Cannot find home directory")?;
 
     let db_path = app_identity::database_path_opt().ok_or("Cannot find home directory")?;
@@ -63,6 +65,8 @@ pub async fn export_bookings_csv(
     from_date: Option<String>,
     to_date: Option<String>,
 ) -> Result<String, String> {
+    require_admin(&state)?;
+
     let from = from_date.unwrap_or_else(|| "2000-01-01".to_string());
     let to = to_date.unwrap_or_else(|| "2099-12-31".to_string());
 
