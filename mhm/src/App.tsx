@@ -20,6 +20,7 @@ import { Home, Calendar, BedDouble, Users, Sparkles, BarChart3, Settings as Sett
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { APP_NAME } from "@/lib/appIdentity";
+import { createDeferredCleanup } from "@/lib/deferredCleanup";
 import { Toaster, toast } from "sonner";
 import { invoke } from "@tauri-apps/api/core";
 import type { BootstrapStatus } from "@/types";
@@ -84,15 +85,13 @@ export default function App() {
   useEffect(() => {
     if (!isAuthenticated) return;
 
-    const unlisten = listen<{ entity: string }>("db-updated", () => {
+    const cleanup = createDeferredCleanup(listen<{ entity: string }>("db-updated", () => {
       // Always refresh rooms and stats on any DB change
       fetchRooms();
       fetchStats();
-    });
+    }));
 
-    return () => {
-      unlisten.then((f) => f());
-    };
+    return cleanup;
   }, [isAuthenticated]);
 
   // Gateway status check
@@ -106,14 +105,14 @@ export default function App() {
   // MCP Gateway events: AI agent reservation notifications
   useEffect(() => {
     if (!isAuthenticated) return;
-    const unlisten = listen<{ booking_id: string; room_id: string }>("mcp_reservation_created", (e) => {
+    const cleanup = createDeferredCleanup(listen<{ booking_id: string; room_id: string }>("mcp_reservation_created", (e) => {
       toast("🤖 AI Agent vừa tạo booking mới", {
         description: `Phòng ${e.payload.room_id} — ID: ${e.payload.booking_id}`,
       });
       fetchRooms();
       fetchStats();
-    });
-    return () => { unlisten.then((f) => f()); };
+    }));
+    return cleanup;
   }, [isAuthenticated]);
 
   // Responsive: auto-collapse sidebar when window is narrow

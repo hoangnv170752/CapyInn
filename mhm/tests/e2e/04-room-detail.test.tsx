@@ -70,4 +70,20 @@ describe("04 — Room Detail", () => {
 
         expect(invoke).toHaveBeenCalledWith("extend_stay", { bookingId: "b1" });
     });
+
+    it("refreshes rooms and stats after extending stay", async () => {
+        const refreshedRooms = [vacantRoomDetail.room];
+        const refreshedStats = { total_rooms: 10, occupied: 1, vacant: 9, cleaning: 0, revenue_today: 800000 };
+
+        setMockResponse("extend_stay", () => createBooking({ id: "b1", nights: 2 }));
+        setMockResponse("get_rooms", () => refreshedRooms);
+        setMockResponse("get_dashboard_stats", () => refreshedStats);
+
+        await useHotelStore.getState().extendStay("b1");
+
+        expect(invoke).toHaveBeenCalledWith("get_rooms");
+        expect(invoke).toHaveBeenCalledWith("get_dashboard_stats");
+        expect(useHotelStore.getState().rooms).toEqual(refreshedRooms);
+        expect(useHotelStore.getState().stats).toEqual(refreshedStats);
+    });
 });

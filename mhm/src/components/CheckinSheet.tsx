@@ -7,6 +7,7 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sh
 import { Button } from "@/components/ui/button";
 import { FormField, FormFieldSelect } from "@/components/shared/FormField";
 import { fmtMoney } from "@/lib/format";
+import { createDeferredCleanup } from "@/lib/deferredCleanup";
 import { toast } from "sonner";
 import type { CccdInfo, GuestInput, GuestSuggestion } from "@/types";
 
@@ -49,7 +50,7 @@ export default function CheckinSheet({ preSelectedRoomId }: { preSelectedRoomId?
 
     // Listen for OCR results from background watcher
     useEffect(() => {
-        const unlisten1 = listen<CccdInfo>("ocr-result", (event) => {
+        const cleanupOcrResult = createDeferredCleanup(listen<CccdInfo>("ocr-result", (event) => {
             const cccd = event.payload;
 
             setGuests((prev) => {
@@ -99,17 +100,17 @@ export default function CheckinSheet({ preSelectedRoomId }: { preSelectedRoomId?
             });
 
             fetchRooms();
-        });
+        }));
 
-        const unlisten2 = listen<string>("ocr-error", (event) => {
+        const cleanupOcrError = createDeferredCleanup(listen<string>("ocr-error", (event) => {
             toast.error("Lỗi quét CCCD", {
                 description: event.payload,
             });
-        });
+        }));
 
         return () => {
-            unlisten1.then((f) => f());
-            unlisten2.then((f) => f());
+            cleanupOcrResult();
+            cleanupOcrError();
         };
     }, []);
 
@@ -476,4 +477,3 @@ export default function CheckinSheet({ preSelectedRoomId }: { preSelectedRoomId?
         </Sheet>
     );
 }
-
