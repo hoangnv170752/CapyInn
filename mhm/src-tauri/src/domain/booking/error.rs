@@ -5,7 +5,6 @@ pub enum BookingError {
     Conflict(String),
     NotFound(String),
     Validation(String),
-    Pricing(String),
     Database(String),
     DateTimeParse(String),
 }
@@ -25,10 +24,6 @@ impl BookingError {
         Self::Validation(message.into())
     }
 
-    pub fn pricing(message: impl Into<String>) -> Self {
-        Self::Pricing(message.into())
-    }
-
     pub fn database(message: impl Into<String>) -> Self {
         Self::Database(message.into())
     }
@@ -44,7 +39,6 @@ impl fmt::Display for BookingError {
             Self::Conflict(message)
             | Self::NotFound(message)
             | Self::Validation(message)
-            | Self::Pricing(message)
             | Self::Database(message)
             | Self::DateTimeParse(message) => f.write_str(message),
         }

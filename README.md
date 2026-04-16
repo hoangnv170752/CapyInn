@@ -6,7 +6,7 @@
 
 *Free, offline-first Property Management System for mini hotels in Vietnam 🇻🇳*
 
-[![CI](https://github.com/chuanman2707/Hotel-Manager/actions/workflows/ci.yml/badge.svg)](https://github.com/chuanman2707/Hotel-Manager/actions/workflows/ci.yml)
+[![CI](https://github.com/chuanman2707/CapyInn/actions/workflows/ci.yml/badge.svg)](https://github.com/chuanman2707/CapyInn/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Tauri](https://img.shields.io/badge/Tauri_2.0-FFC131?style=for-the-badge&logo=tauri&logoColor=white)](https://tauri.app)
 [![Rust](https://img.shields.io/badge/Rust-000000?style=for-the-badge&logo=rust&logoColor=white)](https://www.rust-lang.org)
@@ -166,8 +166,8 @@ node --version
 ### 2. Clone repository
 
 ```bash
-git clone https://github.com/chuanman2707/Hotel-Manager.git
-cd Hotel-Manager/mhm
+git clone https://github.com/chuanman2707/CapyInn.git
+cd CapyInn/mhm
 ```
 
 ### 3. Cài đặt dependencies

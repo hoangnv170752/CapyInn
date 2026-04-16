@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { render, screen, waitFor } from "../helpers/render-app";
 import userEvent from "@testing-library/user-event";
 import LoginScreen from "@/pages/LoginScreen";
+import { APP_LOGO_ALT } from "@/lib/appIdentity";
 import { setMockResponse, clearMockResponses, invoke } from "@test-mocks/tauri-core";
 import { useAuthStore } from "@/stores/useAuthStore";
 
@@ -29,7 +30,7 @@ describe("01 — Login Screen", () => {
         }
 
         // Should show app logo branding instead of text title
-        expect(screen.getByAltText("App logo")).toBeInTheDocument();
+        expect(screen.getByAltText(APP_LOGO_ALT)).toBeInTheDocument();
         expect(screen.queryByText("MHM Hotel")).not.toBeInTheDocument();
 
         // Should show PIN instruction
@@ -136,7 +137,7 @@ describe("01 — Login Screen", () => {
         render(<LoginScreen />);
 
         await waitFor(() => {
-            expect(screen.getByAltText("App logo")).toBeInTheDocument();
+            expect(screen.getByAltText(APP_LOGO_ALT)).toBeInTheDocument();
         });
 
         expect(screen.queryByText("Grand Palace")).not.toBeInTheDocument();

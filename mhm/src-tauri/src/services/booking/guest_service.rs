@@ -11,6 +11,20 @@ pub struct GuestManifest {
     pub guest_ids: Vec<String>,
 }
 
+struct GuestRecordInput<'a> {
+    guest_type: &'a str,
+    full_name: &'a str,
+    doc_number: &'a str,
+    dob: Option<&'a str>,
+    gender: Option<&'a str>,
+    nationality: Option<&'a str>,
+    address: Option<&'a str>,
+    visa_expiry: Option<&'a str>,
+    scan_path: Option<&'a str>,
+    phone: Option<&'a str>,
+    created_at: &'a str,
+}
+
 pub async fn create_guest_manifest(
     tx: &mut Transaction<'_, Sqlite>,
     guests: &[CreateGuestRequest],
@@ -27,17 +41,19 @@ pub async fn create_guest_manifest(
         guest_ids.push(
             insert_guest_record(
                 tx,
-                guest.guest_type.as_deref().unwrap_or("domestic"),
-                &guest.full_name,
-                &guest.doc_number,
-                guest.dob.as_deref(),
-                guest.gender.as_deref(),
-                guest.nationality.as_deref(),
-                guest.address.as_deref(),
-                guest.visa_expiry.as_deref(),
-                guest.scan_path.as_deref(),
-                guest.phone.as_deref(),
-                created_at,
+                GuestRecordInput {
+                    guest_type: guest.guest_type.as_deref().unwrap_or("domestic"),
+                    full_name: &guest.full_name,
+                    doc_number: &guest.doc_number,
+                    dob: guest.dob.as_deref(),
+                    gender: guest.gender.as_deref(),
+                    nationality: guest.nationality.as_deref(),
+                    address: guest.address.as_deref(),
+                    visa_expiry: guest.visa_expiry.as_deref(),
+                    scan_path: guest.scan_path.as_deref(),
+                    phone: guest.phone.as_deref(),
+                    created_at,
+                },
             )
             .await?,
         );
@@ -58,17 +74,19 @@ pub async fn create_reservation_guest_manifest(
 ) -> BookingResult<GuestManifest> {
     let guest_id = insert_guest_record(
         tx,
-        "domestic",
-        guest_name,
-        guest_doc_number.unwrap_or(""),
-        None,
-        None,
-        None,
-        None,
-        None,
-        None,
-        guest_phone,
-        created_at,
+        GuestRecordInput {
+            guest_type: "domestic",
+            full_name: guest_name,
+            doc_number: guest_doc_number.unwrap_or(""),
+            dob: None,
+            gender: None,
+            nationality: None,
+            address: None,
+            visa_expiry: None,
+            scan_path: None,
+            phone: guest_phone,
+            created_at,
+        },
     )
     .await?;
 
@@ -87,17 +105,19 @@ pub async fn create_group_guest_manifest(
     if guests.is_empty() {
         let guest_id = insert_guest_record(
             tx,
-            "domestic",
-            placeholder_name,
-            "",
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            None,
-            created_at,
+            GuestRecordInput {
+                guest_type: "domestic",
+                full_name: placeholder_name,
+                doc_number: "",
+                dob: None,
+                gender: None,
+                nationality: None,
+                address: None,
+                visa_expiry: None,
+                scan_path: None,
+                phone: None,
+                created_at,
+            },
         )
         .await?;
 
@@ -128,17 +148,7 @@ pub async fn link_booking_guests(
 
 async fn insert_guest_record(
     tx: &mut Transaction<'_, Sqlite>,
-    guest_type: &str,
-    full_name: &str,
-    doc_number: &str,
-    dob: Option<&str>,
-    gender: Option<&str>,
-    nationality: Option<&str>,
-    address: Option<&str>,
-    visa_expiry: Option<&str>,
-    scan_path: Option<&str>,
-    phone: Option<&str>,
-    created_at: &str,
+    input: GuestRecordInput<'_>,
 ) -> BookingResult<String> {
     let guest_id = uuid::Uuid::new_v4().to_string();
 
@@ -149,17 +159,17 @@ async fn insert_guest_record(
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(&guest_id)
-    .bind(guest_type)
-    .bind(full_name)
-    .bind(doc_number)
-    .bind(dob)
-    .bind(gender)
-    .bind(nationality)
-    .bind(address)
-    .bind(visa_expiry)
-    .bind(scan_path)
-    .bind(phone)
-    .bind(created_at)
+    .bind(input.guest_type)
+    .bind(input.full_name)
+    .bind(input.doc_number)
+    .bind(input.dob)
+    .bind(input.gender)
+    .bind(input.nationality)
+    .bind(input.address)
+    .bind(input.visa_expiry)
+    .bind(input.scan_path)
+    .bind(input.phone)
+    .bind(input.created_at)
     .execute(&mut **tx)
     .await?;
 

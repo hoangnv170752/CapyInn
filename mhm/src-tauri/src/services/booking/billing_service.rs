@@ -32,6 +32,7 @@ pub async fn add_folio_line(
     .await
 }
 
+#[allow(dead_code)]
 pub async fn record_charge(
     pool: &Pool<Sqlite>,
     booking_id: &str,
@@ -46,6 +47,7 @@ pub async fn record_charge(
     Ok(())
 }
 
+#[allow(dead_code)]
 pub async fn record_payment(
     pool: &Pool<Sqlite>,
     booking_id: &str,

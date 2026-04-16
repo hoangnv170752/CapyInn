@@ -184,30 +184,6 @@ pub async fn extend_stay(
         .map_err(|error| error.to_string())
 }
 
-pub(crate) async fn get_booking_by_id(pool: &Pool<Sqlite>, id: &str) -> Result<Booking, String> {
-    let r = sqlx::query("SELECT * FROM bookings WHERE id = ?")
-        .bind(id)
-        .fetch_one(pool)
-        .await
-        .map_err(|e| e.to_string())?;
-
-    Ok(Booking {
-        id: r.get("id"),
-        room_id: r.get("room_id"),
-        primary_guest_id: r.get("primary_guest_id"),
-        check_in_at: r.get("check_in_at"),
-        expected_checkout: r.get("expected_checkout"),
-        actual_checkout: r.get("actual_checkout"),
-        nights: r.get("nights"),
-        total_price: get_f64(&r, "total_price"),
-        paid_amount: get_f64(&r, "paid_amount"),
-        status: r.get("status"),
-        source: r.get("source"),
-        notes: r.get("notes"),
-        created_at: r.get("created_at"),
-    })
-}
-
 // ─── Housekeeping Commands ───
 
 #[tauri::command]

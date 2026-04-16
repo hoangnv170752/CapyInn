@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "../helpers/render-app";
 import userEvent from "@testing-library/user-event";
 import App from "@/App";
+import { APP_LOGO_ALT } from "@/lib/appIdentity";
 import { setMockResponse, clearMockResponses, invoke } from "@test-mocks/tauri-core";
 import { useAuthStore } from "@/stores/useAuthStore";
 import { useHotelStore } from "@/stores/useHotelStore";
@@ -69,7 +70,7 @@ describe("12 — Navigation & Layout", () => {
             expect(screen.getByText("Dashboard")).toBeInTheDocument();
         });
 
-        expect(screen.getByAltText("App logo")).toBeInTheDocument();
+        expect(screen.getByAltText(APP_LOGO_ALT)).toBeInTheDocument();
 
         // Some labels may appear in multiple places (sidebar + page title), use getAllByText
         expect(screen.getAllByText("Reservations").length).toBeGreaterThanOrEqual(1);

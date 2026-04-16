@@ -2,6 +2,7 @@ use sqlx::{Pool, Row, Sqlite, Transaction};
 
 use super::{BookingError, BookingResult};
 
+#[allow(dead_code)]
 pub async fn calculate_stay_price(
     pool: &Pool<Sqlite>,
     room_id: &str,
@@ -42,6 +43,7 @@ pub async fn calculate_stay_price_tx(
     ))
 }
 
+#[allow(dead_code)]
 async fn load_room_type(pool: &Pool<Sqlite>, room_id: &str) -> BookingResult<String> {
     sqlx::query_scalar::<_, String>("SELECT type FROM rooms WHERE id = ? LIMIT 1")
         .bind(room_id)
@@ -63,6 +65,7 @@ async fn load_room_type_tx(
         .ok_or_else(|| BookingError::not_found(format!("Không tìm thấy phòng {}", room_id)))
 }
 
+#[allow(dead_code)]
 async fn load_pricing_rule(pool: &Pool<Sqlite>, room_type: &str) -> BookingResult<crate::pricing::PricingRule> {
     let room_type_lower = room_type.to_lowercase();
     let row = sqlx::query(
@@ -168,6 +171,7 @@ async fn load_pricing_rule_tx(
     })
 }
 
+#[allow(dead_code)]
 async fn load_special_uplift(pool: &Pool<Sqlite>, date_str: &str) -> BookingResult<f64> {
     let date = if date_str.len() >= 10 { &date_str[..10] } else { date_str };
     let row: Option<(f64,)> = sqlx::query_as(

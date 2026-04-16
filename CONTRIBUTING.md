@@ -17,8 +17,8 @@ Thanks for contributing.
 ## Local Setup
 
 ```bash
-git clone https://github.com/chuanman2707/Hotel-Manager.git
-cd Hotel-Manager/mhm
+git clone https://github.com/chuanman2707/CapyInn.git
+cd CapyInn/mhm
 npm ci
 ```
 
