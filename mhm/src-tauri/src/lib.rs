@@ -127,7 +127,6 @@ pub fn run() {
             commands::reservations::modify_reservation,
             commands::reservations::get_room_calendar,
             commands::reservations::get_rooms_availability,
-            commands::reservations::change_booking_room,
             // MCP Gateway
             gateway_generate_key,
             gateway_get_status,
