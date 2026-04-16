@@ -1,7 +1,7 @@
 use tauri::Manager;
 
-mod commands;
 pub mod app_identity;
+mod commands;
 mod db;
 mod domain;
 pub mod gateway;
@@ -47,11 +47,7 @@ pub fn run() {
                 current_user: Arc::new(Mutex::new(None)),
             });
 
-            // Create ~/MHM/models/ directory
-            if let Some(home) = dirs::home_dir() {
-                let models_dir = home.join("MHM").join("models");
-                let _ = std::fs::create_dir_all(&models_dir);
-            }
+            let _ = std::fs::create_dir_all(app_identity::models_dir());
 
             // Start file watcher in background
             let handle = app.handle().clone();
@@ -170,13 +166,9 @@ async fn gateway_get_status(
     state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, String> {
     let has_keys = gateway::auth::has_api_keys(&state.db).await;
-    let port = if let Some(home) = dirs::home_dir() {
-        std::fs::read_to_string(home.join("MHM").join(".gateway-port"))
-            .ok()
-            .and_then(|s| s.trim().parse::<u16>().ok())
-    } else {
-        None
-    };
+    let port = std::fs::read_to_string(app_identity::gateway_lockfile())
+        .ok()
+        .and_then(|s| s.trim().parse::<u16>().ok());
 
     Ok(serde_json::json!({
         "running": port.is_some(),

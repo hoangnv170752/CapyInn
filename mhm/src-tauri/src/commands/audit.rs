@@ -1,4 +1,5 @@
 use super::{emit_db_update, require_admin, AppState};
+use crate::app_identity;
 use crate::{queries::booking::audit_queries, services::booking::audit_service};
 use tauri::State;
 
@@ -38,11 +39,9 @@ pub async fn get_audit_logs(
 
 #[tauri::command]
 pub async fn backup_database() -> Result<String, String> {
-    let db_dir = dirs::home_dir()
-        .ok_or("Cannot find home directory")?
-        .join("MHM");
+    let db_dir = app_identity::runtime_root();
 
-    let db_path = db_dir.join("mhm.db");
+    let db_path = app_identity::database_path();
     if !db_path.exists() {
         return Err("Database file not found".to_string());
     }
@@ -100,10 +99,7 @@ pub async fn export_bookings_csv(
     }
 
     // Save to file
-    let export_dir = dirs::home_dir()
-        .ok_or("Cannot find home directory")?
-        .join("MHM")
-        .join("exports");
+    let export_dir = app_identity::exports_dir();
     std::fs::create_dir_all(&export_dir).map_err(|e| e.to_string())?;
 
     let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();

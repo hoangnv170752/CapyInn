@@ -1,8 +1,10 @@
-use ocr_rs::{OcrEngine, OcrEngineConfig, Backend};
+use ocr_rs::{Backend, OcrEngine, OcrEngineConfig};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+
+use crate::app_identity;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CccdInfo {
@@ -18,9 +20,12 @@ pub struct CccdInfo {
 /// Find models directory from multiple candidates
 pub fn find_models_dir() -> Result<PathBuf, String> {
     let candidates: Vec<PathBuf> = vec![
-        dirs::home_dir().unwrap_or_default().join("MHM").join("models"),
+        app_identity::models_dir(),
         std::env::current_dir().unwrap_or_default().join("models"),
-        std::env::current_dir().unwrap_or_default().join("..").join("models"),
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join("..")
+            .join("models"),
     ];
 
     candidates
@@ -30,7 +35,11 @@ pub fn find_models_dir() -> Result<PathBuf, String> {
         .ok_or_else(|| {
             format!(
                 "OCR models not found. Searched: {}",
-                candidates.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ")
+                candidates
+                    .iter()
+                    .map(|p| p.display().to_string())
+                    .collect::<Vec<_>>()
+                    .join(", ")
             )
         })
 }
@@ -44,15 +53,15 @@ pub fn create_engine() -> Result<OcrEngine, String> {
     let rec_path = models_dir.join("PP-OCRv5_mobile_rec.mnn");
     let keys_path = models_dir.join("ppocr_keys_v5.txt");
 
-    let config = OcrEngineConfig::new()
-        .with_backend(Backend::Metal);
+    let config = OcrEngineConfig::new().with_backend(Backend::Metal);
 
     let engine = OcrEngine::new(
         det_path.to_str().unwrap(),
         rec_path.to_str().unwrap(),
         keys_path.to_str().unwrap(),
         Some(config),
-    ).map_err(|e| format!("Failed to create OCR engine: {}", e))?;
+    )
+    .map_err(|e| format!("Failed to create OCR engine: {}", e))?;
 
     println!("OCR engine ready (Metal backend)");
     Ok(engine)
@@ -60,10 +69,10 @@ pub fn create_engine() -> Result<OcrEngine, String> {
 
 /// Run OCR on an image file → return all recognized text lines
 pub fn ocr_image(engine: &OcrEngine, image_path: &Path) -> Result<Vec<String>, String> {
-    let img = image::open(image_path)
-        .map_err(|e| format!("Failed to open image: {}", e))?;
+    let img = image::open(image_path).map_err(|e| format!("Failed to open image: {}", e))?;
 
-    let results = engine.recognize(&img)
+    let results = engine
+        .recognize(&img)
         .map_err(|e| format!("OCR recognition failed: {}", e))?;
 
     let lines: Vec<String> = results
@@ -84,8 +93,8 @@ pub fn parse_cccd(lines: &[String]) -> CccdInfo {
         .and_then(|re| re.find(&full_text).map(|m| m.as_str().to_string()))
         .unwrap_or_default();
 
-    let full_name = extract_field_value(lines, &["Họ và tên", "Full name", "Ho va ten"])
-        .unwrap_or_default();
+    let full_name =
+        extract_field_value(lines, &["Họ và tên", "Full name", "Ho va ten"]).unwrap_or_default();
 
     let dob = Regex::new(r"\b(\d{2}/\d{2}/\d{4})\b")
         .ok()

@@ -1,6 +1,8 @@
 use std::io::{self, BufRead, Write};
 use std::net::TcpStream;
 
+use crate::app_identity;
+
 /// Run the dumb pipe proxy: stdin → TCP → stdout.
 /// This is Process B — called when the binary is invoked with `--mcp-stdio`.
 /// All logic/DB/state lives in Process A (Tauri GUI app).
@@ -72,8 +74,7 @@ pub fn run_proxy() {
 }
 
 fn read_port_from_lockfile() -> Option<u16> {
-    let home = dirs::home_dir()?;
-    let lockfile = home.join("MHM").join(".gateway-port");
+    let lockfile = app_identity::gateway_lockfile();
     let content = std::fs::read_to_string(&lockfile).ok()?;
     content.trim().parse().ok()
 }

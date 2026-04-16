@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use std::thread;
 use tauri::{AppHandle, Emitter};
 
+use crate::app_identity;
 use crate::ocr;
 
 const VALID_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "tiff", "tif"];
@@ -10,9 +11,12 @@ const VALID_EXTENSIONS: &[&str] = &["jpg", "jpeg", "png", "tiff", "tif"];
 /// Start watching for new image files in Scans directory
 pub fn start_watcher(app_handle: AppHandle) -> Result<(), String> {
     let candidates: Vec<PathBuf> = vec![
-        dirs::home_dir().unwrap_or_default().join("MHM").join("Scans"),
+        app_identity::scans_dir(),
         std::env::current_dir().unwrap_or_default().join("Scans"),
-        std::env::current_dir().unwrap_or_default().join("..").join("Scans"),
+        std::env::current_dir()
+            .unwrap_or_default()
+            .join("..")
+            .join("Scans"),
     ];
 
     let scans_dir = candidates
@@ -57,7 +61,10 @@ fn run_watcher(scans_dir: PathBuf, app_handle: AppHandle) -> Result<(), String> 
     let engine = match ocr::create_engine() {
         Ok(e) => e,
         Err(e) => {
-            eprintln!("OCR engine not available: {}. Watcher running without OCR.", e);
+            eprintln!(
+                "OCR engine not available: {}. Watcher running without OCR.",
+                e
+            );
             loop {
                 let _ = rx.recv();
             }
