@@ -1,5 +1,5 @@
-use tauri::Manager;
 use log::{error, info};
+use tauri::Manager;
 
 pub mod app_identity;
 mod commands;
@@ -41,8 +41,16 @@ impl GatewayRuntimeState {
     }
 
     fn shutdown(&self) {
-        let shutdown_tx = self.shutdown_tx.lock().ok().and_then(|mut guard| guard.take());
-        let server_task = self.server_task.lock().ok().and_then(|mut guard| guard.take());
+        let shutdown_tx = self
+            .shutdown_tx
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take());
+        let server_task = self
+            .server_task
+            .lock()
+            .ok()
+            .and_then(|mut guard| guard.take());
 
         if let Some(shutdown_tx) = shutdown_tx {
             let _ = shutdown_tx.send(());
@@ -165,7 +173,6 @@ pub fn run() {
             commands::pricing::save_pricing_rule,
             commands::pricing::calculate_price_preview,
             commands::pricing::get_special_dates,
-            commands::pricing::save_special_date,
             // Folio/Billing
             commands::billing::add_folio_line,
             commands::billing::get_folio_lines,
@@ -203,7 +210,10 @@ pub fn run() {
         .expect("error while building tauri application");
 
     app.run(|app_handle, event| {
-        if matches!(event, tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }) {
+        if matches!(
+            event,
+            tauri::RunEvent::Exit | tauri::RunEvent::ExitRequested { .. }
+        ) {
             app_handle.state::<GatewayRuntimeState>().shutdown();
         }
     });
