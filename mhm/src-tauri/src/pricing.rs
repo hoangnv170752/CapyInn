@@ -73,34 +73,34 @@ pub fn calculate_price(
     check_out: &str,
     pricing_type: &str,
     special_dates_uplift: f64,
-) -> PricingResult {
-    let zero = PricingResult {
-        pricing_type: pricing_type.to_string(),
-        base_amount: 0.0,
-        surcharge_amount: 0.0,
-        weekend_amount: 0.0,
-        total: 0.0,
-        breakdown: vec![],
-        capped: false,
-    };
-
+) -> Result<PricingResult, String> {
     let ci_has_time = has_explicit_time(check_in);
     let co_has_time = has_explicit_time(check_out);
-    let Some(ci) = parse_datetime(check_in) else { return zero; };
-    let Some(co) = parse_datetime(check_out) else { return zero; };
+    let ci = parse_datetime(check_in)
+        .ok_or_else(|| format!("Invalid check-in datetime: '{}'", check_in))?;
+    let co = parse_datetime(check_out)
+        .ok_or_else(|| format!("Invalid check-out datetime: '{}'", check_out))?;
 
     if co <= ci {
-        return zero;
+        return Ok(PricingResult {
+            pricing_type: pricing_type.to_string(),
+            base_amount: 0.0,
+            surcharge_amount: 0.0,
+            weekend_amount: 0.0,
+            total: 0.0,
+            breakdown: vec![],
+            capped: false,
+        });
     }
 
-    match pricing_type {
+    Ok(match pricing_type {
         "hourly" => calculate_hourly(rule, ci, co, special_dates_uplift),
         "overnight" => {
             calculate_overnight(rule, ci, co, special_dates_uplift, ci_has_time, co_has_time)
         }
         "daily" => calculate_daily(rule, ci, co, special_dates_uplift, ci_has_time, co_has_time),
         _ => calculate_nightly(rule, ci, co, special_dates_uplift),
-    }
+    })
 }
 
 /// Legacy nightly calculation: base_price × nights (backward compatible)
@@ -410,13 +410,15 @@ fn calculate_weekend_uplift(rule: &PricingRule, ci: NaiveDateTime, co: NaiveDate
         return 0.0;
     }
 
-    let mut date = ci.date();
-    let end_date = co.date();
-    let mut weekend_days = 0;
-    let mut total_days = 0;
+    let from = ci.date();
+    let to = co.date();
+    // For same-day stays (e.g. hourly) count the check-in day;
+    // for multi-day stays use exclusive checkout so the departure day is not charged.
+    let total_days = (to - from).num_days().max(1);
+    let mut weekend_days: i64 = 0;
+    let mut date = from;
 
-    while date < end_date {
-        total_days += 1;
+    for _ in 0..total_days {
         match date.weekday() {
             Weekday::Sat | Weekday::Sun => weekend_days += 1,
             _ => {}
@@ -424,12 +426,8 @@ fn calculate_weekend_uplift(rule: &PricingRule, ci: NaiveDateTime, co: NaiveDate
         date = date.succ_opt().unwrap_or(date);
     }
 
-    if total_days == 0 {
-        return 0.0;
-    }
     let weekend_ratio = weekend_days as f64 / total_days as f64;
-    let base_per_day = rule.daily_rate;
-    base_per_day * weekend_ratio * rule.weekend_uplift_pct / 100.0 * total_days as f64
+    rule.daily_rate * weekend_ratio * rule.weekend_uplift_pct / 100.0 * total_days as f64
 }
 
 /// Check if a datetime string contains an explicit time component.
@@ -482,6 +480,16 @@ fn fmt_vnd(amount: f64) -> String {
 mod tests {
     use super::*;
 
+    fn p(
+        rule: &PricingRule,
+        ci: &str,
+        co: &str,
+        pricing_type: &str,
+        uplift: f64,
+    ) -> PricingResult {
+        calculate_price(rule, ci, co, pricing_type, uplift).unwrap()
+    }
+
     // No weekend uplift for predictable assertions
     fn std_rule() -> PricingRule {
         PricingRule {
@@ -503,65 +511,35 @@ mod tests {
 
     #[test]
     fn test_hourly_1h() {
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T10:00:00",
-            "2026-03-17T11:00:00",
-            "hourly",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T10:00:00", "2026-03-17T11:00:00", "hourly", 0.0);
         assert_eq!(r.total, 80_000.0);
         assert!(!r.capped);
     }
 
     #[test]
     fn test_hourly_2h() {
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T10:00:00",
-            "2026-03-17T12:00:00",
-            "hourly",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T10:00:00", "2026-03-17T12:00:00", "hourly", 0.0);
         assert_eq!(r.total, 160_000.0);
         assert!(!r.capped);
     }
 
     #[test]
     fn test_hourly_3h() {
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T09:00:00",
-            "2026-03-17T12:00:00",
-            "hourly",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T09:00:00", "2026-03-17T12:00:00", "hourly", 0.0);
         assert_eq!(r.total, 240_000.0);
         assert!(!r.capped);
     }
 
     #[test]
     fn test_hourly_partial_hour_rounds_up() {
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T10:00:00",
-            "2026-03-17T11:30:00",
-            "hourly",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T10:00:00", "2026-03-17T11:30:00", "hourly", 0.0);
         assert_eq!(r.total, 160_000.0); // ceil(1.5) = 2h × 80k
     }
 
     #[test]
     fn test_hourly_capping_to_overnight() {
         // 5h × 80k = 400k > overnight 300k → capped
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T18:00:00",
-            "2026-03-17T23:00:00",
-            "hourly",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T18:00:00", "2026-03-17T23:00:00", "hourly", 0.0);
         assert_eq!(r.total, 300_000.0);
         assert!(r.capped);
     }
@@ -569,52 +547,28 @@ mod tests {
     #[test]
     fn test_hourly_capping_to_daily() {
         // 20h × 80k = 1600k > daily 400k → capped
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T08:00:00",
-            "2026-03-18T04:00:00",
-            "hourly",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T08:00:00", "2026-03-18T04:00:00", "hourly", 0.0);
         assert!(r.capped);
         assert!(r.total <= 400_000.0 * 2.0);
     }
 
     #[test]
     fn test_overnight_basic() {
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T22:00:00",
-            "2026-03-18T11:00:00",
-            "overnight",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T22:00:00", "2026-03-18T11:00:00", "overnight", 0.0);
         assert_eq!(r.base_amount, 300_000.0);
         assert_eq!(r.surcharge_amount, 0.0);
     }
 
     #[test]
     fn test_overnight_early_checkin() {
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T18:00:00",
-            "2026-03-18T11:00:00",
-            "overnight",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T18:00:00", "2026-03-18T11:00:00", "overnight", 0.0);
         assert_eq!(r.base_amount, 300_000.0);
         assert_eq!(r.surcharge_amount, 90_000.0); // 30% of 300k
     }
 
     #[test]
     fn test_overnight_late_checkout() {
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T22:00:00",
-            "2026-03-18T14:00:00",
-            "overnight",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T22:00:00", "2026-03-18T14:00:00", "overnight", 0.0);
         assert_eq!(r.base_amount, 300_000.0);
         assert_eq!(r.surcharge_amount, 90_000.0); // 30% of 300k
     }
@@ -623,92 +577,54 @@ mod tests {
 
     #[test]
     fn test_daily_date_only_no_surcharge() {
-        // Date-only: no explicit time → no surcharge
-        let r = calculate_price(&std_rule(), "2026-03-17", "2026-03-18", "daily", 0.0);
+        let r = p(&std_rule(), "2026-03-17", "2026-03-18", "daily", 0.0);
         assert_eq!(r.base_amount, 400_000.0);
-        assert_eq!(r.surcharge_amount, 0.0); // NO surcharge!
+        assert_eq!(r.surcharge_amount, 0.0);
     }
 
     #[test]
     fn test_overnight_date_only_no_surcharge() {
-        let r = calculate_price(&std_rule(), "2026-03-17", "2026-03-18", "overnight", 0.0);
+        let r = p(&std_rule(), "2026-03-17", "2026-03-18", "overnight", 0.0);
         assert_eq!(r.base_amount, 300_000.0);
-        assert_eq!(r.surcharge_amount, 0.0); // NO surcharge!
+        assert_eq!(r.surcharge_amount, 0.0);
     }
 
     #[test]
     fn test_daily_explicit_early_time_has_surcharge() {
-        // Explicit early time → surcharge should apply
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T10:00:00",
-            "2026-03-18T12:00:00",
-            "daily",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T10:00:00", "2026-03-18T12:00:00", "daily", 0.0);
         assert_eq!(r.surcharge_amount, 120_000.0); // 30% of 400k
     }
 
     #[test]
     fn test_daily_1day() {
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T14:00:00",
-            "2026-03-18T12:00:00",
-            "daily",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T14:00:00", "2026-03-18T12:00:00", "daily", 0.0);
         assert_eq!(r.base_amount, 400_000.0);
         assert_eq!(r.surcharge_amount, 0.0);
     }
 
     #[test]
     fn test_daily_2days() {
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T14:00:00",
-            "2026-03-19T12:00:00",
-            "daily",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T14:00:00", "2026-03-19T12:00:00", "daily", 0.0);
         assert_eq!(r.base_amount, 800_000.0);
     }
 
     #[test]
     fn test_daily_early_checkin_surcharge() {
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T10:00:00",
-            "2026-03-18T12:00:00",
-            "daily",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T10:00:00", "2026-03-18T12:00:00", "daily", 0.0);
         assert_eq!(r.base_amount, 400_000.0);
         assert_eq!(r.surcharge_amount, 120_000.0); // 30% of 400k
     }
 
     #[test]
     fn test_daily_late_checkout_surcharge() {
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T14:00:00",
-            "2026-03-18T15:00:00",
-            "daily",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T14:00:00", "2026-03-18T15:00:00", "daily", 0.0);
         assert_eq!(r.base_amount, 400_000.0);
         assert_eq!(r.surcharge_amount, 120_000.0); // 30% of 400k
     }
 
     #[test]
     fn test_special_date_uplift() {
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T14:00:00",
-            "2026-03-18T12:00:00",
-            "daily",
-            50.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T14:00:00", "2026-03-18T12:00:00", "daily", 50.0);
         assert_eq!(r.base_amount, 400_000.0);
         assert_eq!(r.surcharge_amount, 200_000.0); // 50% uplift
         assert_eq!(r.total, 600_000.0);
@@ -716,43 +632,38 @@ mod tests {
 
     #[test]
     fn test_nightly_legacy() {
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T14:00:00",
-            "2026-03-19T12:00:00",
-            "nightly",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T14:00:00", "2026-03-19T12:00:00", "nightly", 0.0);
         assert_eq!(r.base_amount, 800_000.0); // 2 nights × 400k
     }
 
     #[test]
     fn test_zero_duration() {
-        let r = calculate_price(
-            &std_rule(),
-            "2026-03-17T14:00:00",
-            "2026-03-17T14:00:00",
-            "hourly",
-            0.0,
-        );
+        let r = p(&std_rule(), "2026-03-17T14:00:00", "2026-03-17T14:00:00", "hourly", 0.0);
         assert_eq!(r.total, 0.0);
     }
 
     #[test]
     fn test_weekend_uplift() {
         // Sat-Sun: 2026-03-21 = Saturday, 2026-03-22 = Sunday
-        let rule = PricingRule {
-            weekend_uplift_pct: 20.0,
-            ..std_rule()
-        };
-        let r = calculate_price(
-            &rule,
-            "2026-03-21T14:00:00",
-            "2026-03-22T12:00:00",
-            "daily",
-            0.0,
-        );
+        let rule = PricingRule { weekend_uplift_pct: 20.0, ..std_rule() };
+        let r = p(&rule, "2026-03-21T14:00:00", "2026-03-22T12:00:00", "daily", 0.0);
         assert_eq!(r.base_amount, 400_000.0);
         assert!(r.weekend_amount > 0.0);
+    }
+
+    #[test]
+    fn test_invalid_datetime_returns_error() {
+        let result = calculate_price(&std_rule(), "not-a-date", "2026-03-18", "daily", 0.0);
+        assert!(result.is_err());
+        let result = calculate_price(&std_rule(), "2026-03-17", "INVALID", "daily", 0.0);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_same_day_weekend_uplift() {
+        // Same-day Saturday hourly stay should still get weekend uplift
+        let rule = PricingRule { weekend_uplift_pct: 20.0, ..std_rule() };
+        let r = p(&rule, "2026-03-21T10:00:00", "2026-03-21T12:00:00", "hourly", 0.0);
+        assert!(r.weekend_amount > 0.0, "same-day Saturday stay must get weekend uplift");
     }
 }

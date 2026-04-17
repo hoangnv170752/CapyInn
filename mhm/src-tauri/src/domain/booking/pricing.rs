@@ -14,13 +14,14 @@ pub async fn calculate_stay_price(
     let rule = load_pricing_rule(pool, &room_type).await?;
     let special_uplift = load_special_uplift(pool, check_in).await?;
 
-    Ok(crate::pricing::calculate_price(
+    crate::pricing::calculate_price(
         &rule,
         check_in,
         check_out,
         pricing_type,
         special_uplift,
-    ))
+    )
+    .map_err(BookingError::datetime_parse)
 }
 
 pub async fn calculate_stay_price_tx(
@@ -34,13 +35,14 @@ pub async fn calculate_stay_price_tx(
     let rule = load_pricing_rule_tx(tx, &room_type).await?;
     let special_uplift = load_special_uplift_tx(tx, check_in).await?;
 
-    Ok(crate::pricing::calculate_price(
+    crate::pricing::calculate_price(
         &rule,
         check_in,
         check_out,
         pricing_type,
         special_uplift,
-    ))
+    )
+    .map_err(BookingError::datetime_parse)
 }
 
 #[allow(dead_code)]
