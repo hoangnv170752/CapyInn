@@ -2,9 +2,9 @@
 
 # CapyInn
 
-**Phần mềm quản lý khách sạn mini, offline-first**
+**Offline-first property management software for mini hotels**
 
-*Desktop PMS miễn phí cho khách sạn nhỏ tại Việt Nam.*
+*A free desktop PMS for small hotels and guesthouses in Vietnam.*
 
 [![CI](https://github.com/chuanman2707/CapyInn/actions/workflows/ci.yml/badge.svg)](https://github.com/chuanman2707/CapyInn/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
@@ -14,81 +14,85 @@
 [![SQLite](https://img.shields.io/badge/SQLite-003B57?style=for-the-badge&logo=sqlite&logoColor=white)](https://sqlite.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-3178C6?style=for-the-badge&logo=typescript&logoColor=white)](https://www.typescriptlang.org)
 
-**Onboarding khởi tạo khách sạn · OCR quét CCCD · Check-in/check-out · Reservations · Night audit**
-
-[English README](README.en.md)
+**Property onboarding · Vietnamese ID OCR · Check-in/check-out · Reservations · Night audit**
 
 </div>
 
-CapyInn là ứng dụng desktop cho mô hình khách sạn mini hoặc nhà nghỉ cần vận hành cục bộ, không phụ thuộc server riêng và không cần Internet để xử lý nghiệp vụ hằng ngày. Project tập trung vào các luồng thật sự cần ở quầy lễ tân: tạo sơ đồ phòng, nhập khách nhanh, OCR CCCD, tính tiền theo đêm, housekeeping, báo cáo doanh thu và đối soát cuối ngày.
+CapyInn is a desktop app for mini hotels and guesthouses that need a local-first operating tool without relying on a remote backend. The project focuses on real front-desk workflows: room layout setup, faster guest intake, Vietnamese ID OCR, nightly pricing, housekeeping, revenue reporting, and end-of-day reconciliation.
 
-> Ghi chú: `CapyInn` là clean-slate rename từ `MHM`. Build hiện tại dùng runtime root mới tại `~/CapyInn` và không tự động migrate dữ liệu cũ từ `~/MHM`.
+> Note: `CapyInn` is a clean-slate rename from `MHM`. Current builds use the new runtime root at `~/CapyInn` and do not auto-migrate legacy local data from `~/MHM`.
 
 <details>
-<summary>Mục lục</summary>
+<summary>Table of contents</summary>
 
-- [CapyInn giải quyết gì](#capyinn-giải-quyết-gì)
-- [Tính năng chính](#tính-năng-chính)
+- [What CapyInn solves](#what-capyinn-solves)
+- [Key features](#key-features)
 - [Tech stack](#tech-stack)
-- [Yêu cầu hệ thống](#yêu-cầu-hệ-thống)
-- [Chạy local](#chạy-local)
+- [System requirements](#system-requirements)
+- [Local development](#local-development)
 - [Verification](#verification)
-- [Cấu trúc repository](#cấu-trúc-repository)
+- [Repository layout](#repository-layout)
 - [Known limitations](#known-limitations)
-- [Tài liệu liên quan](#tài-liệu-liên-quan)
-- [Đóng góp](#đóng-góp)
+- [Additional docs](#additional-docs)
+- [Contributing](#contributing)
 - [License](#license)
 
 </details>
 
-## CapyInn giải quyết gì
+## What CapyInn solves
 
-CapyInn sinh ra cho bối cảnh rất cụ thể: khách sạn nhỏ cần một hệ thống đủ dùng ngay, chạy local, dễ kiểm soát dữ liệu, và không bị khóa vào SaaS.
+CapyInn is built for a narrow but practical use case: small hotels that need a system they can run locally, control directly, and adopt without a long setup project.
 
-| Trước khi có app | Với CapyInn |
+| Before | With CapyInn |
 | --- | --- |
-| Ghi sổ tay, dễ sai và khó tra cứu | Trạng thái phòng, booking và giao dịch đều nằm trong một app |
-| Nhập lưu trú thủ công từ CCCD | OCR trích xuất thông tin, copy sang web lưu trú nhanh hơn |
-| Tính tiền theo đêm bằng tay | Luồng check-in, extend stay, check-out và folio được tính tự động |
-| Cuối ngày tổng hợp doanh thu thủ công | Dashboard, analytics, expenses và night audit có sẵn |
-| Thiết lập ban đầu mất công | Onboarding sinh room types, room layout và cấu hình vận hành ngay trong app |
+| Handwritten logs and fragmented tracking | Room status, bookings, and transactions live in one app |
+| Manual guest registration entry | OCR extracts Vietnamese ID details and speeds up intake |
+| Nightly pricing calculated by hand | Check-in, extend-stay, check-out, and folio flows are automated |
+| End-of-day reporting done manually | Dashboard, analytics, expenses, and night audit are built in |
+| Initial setup takes too much time | Onboarding generates room types, layouts, and operating defaults |
 
-## Tính năng chính
+## Key features
 
-### Onboarding và cấu hình ban đầu
+### Onboarding and property setup
 
-- Khởi tạo tên khách sạn, giờ check-in/check-out, thông tin hóa đơn và app lock
-- Tạo room types và giá mặc định ngay trong wizard đầu tiên
-- Sinh sơ đồ phòng theo tầng, số phòng mỗi tầng và naming scheme
+- Configure hotel identity, check-in and check-out rules, invoice details, and app lock
+- Create room types and default pricing during the first-run wizard
+- Generate a room layout by floors, room count, and naming scheme
 
-### Lễ tân và vận hành khách ở
+### Front-desk operations
 
-- Dashboard theo sơ đồ phòng đã cấu hình
-- Check-in, check-out, extend stay và reservation flow trong cùng một app
-- Hỗ trợ nhiều khách trên một booking
-- Copy nhanh thông tin lưu trú để nhập sang cổng khai báo
+- Dashboard organized around the configured room layout
+- Check-in, check-out, extend-stay, and reservation flows in one desktop app
+- Support for multiple guests on the same booking
+- Fast copy flow for guest registration details
 
-### OCR CCCD và nhập liệu nhanh
+### Vietnamese ID OCR
 
-- OCR nội bộ bằng PaddleOCR v5 qua `ocr-rs`
-- Theo dõi thư mục `~/CapyInn/Scans/` để nhận ảnh mới
-- Trích xuất họ tên, số CCCD, ngày sinh và địa chỉ cho luồng check-in
+- Local OCR powered by PaddleOCR v5 through `ocr-rs`
+- Watches `~/CapyInn/Scans/` for new scan files
+- Extracts guest name, national ID number, birth date, and address for check-in
 
-### Doanh thu, thanh toán và báo cáo
+### Billing, payments, and reporting
 
-- Tính tiền theo đêm và theo room type
-- Ghi nhận charge, payment, deposit và công nợ
-- Báo cáo doanh thu, chi phí, analytics và export CSV
+- Night-based pricing by room type
+- Charge, payment, deposit, and balance tracking
+- Revenue analytics, expense tracking, and CSV export
 
-### Housekeeping và night audit
+### Housekeeping and night audit
 
-- Theo dõi trạng thái dọn phòng sau check-out
-- Ghi chú bảo trì cho từng phòng
-- Night audit để đối soát giao dịch cuối ngày
+- Post-checkout housekeeping state tracking
+- Maintenance notes per room
+- Night-audit flow for daily reconciliation
+
+### MCP and automation integrations
+
+- CapyInn can be extended through MCP-friendly workflows for operator tooling and agent-driven automations
+- These flows can be paired with OpenClaw and n8n for custom orchestration around hotel operations
+- For Zalo personal chat automations, you can use the prebuilt community node [`n8n-nodes-zca-zalo`](https://www.npmjs.com/package/n8n-nodes-zca-zalo), published on npm and built on top of `zca-js`
 
 ## Tech stack
 
-| Layer | Công nghệ |
+| Layer | Technology |
 | --- | --- |
 | App shell | Tauri 2 |
 | Backend | Rust + SQLite (`sqlx`) |
@@ -99,21 +103,21 @@ CapyInn sinh ra cho bối cảnh rất cụ thể: khách sạn nhỏ cần mộ
 | Charts | Recharts |
 | Tests | Vitest + Rust tests + Clippy |
 
-## Yêu cầu hệ thống
+## System requirements
 
-| Thành phần | Yêu cầu |
+| Component | Requirement |
 | --- | --- |
 | macOS | 12+ |
 | Node.js | 20+ |
-| Rust | stable qua `rustup` |
-| Xcode CLT | bản mới |
-| Dung lượng | khoảng 25MB, chưa tính dữ liệu phát sinh |
+| Rust | stable via `rustup` |
+| Xcode CLT | recent version |
+| Disk footprint | roughly 25MB before operational data |
 
-Hiện tại project được verify mạnh nhất trên macOS / Apple Silicon.
+The project is currently verified most heavily on macOS and Apple Silicon.
 
-## Chạy local
+## Local development
 
-### Cài prerequisites
+### Install prerequisites
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
@@ -122,7 +126,7 @@ xcode-select --install
 node --version
 ```
 
-### Clone và chạy app desktop
+### Clone and run the desktop app
 
 ```bash
 git clone https://github.com/chuanman2707/CapyInn.git
@@ -131,14 +135,14 @@ npm ci
 npm run tauri dev
 ```
 
-### Build release
+### Build a release bundle
 
 ```bash
 cd CapyInn/mhm
 npm run tauri build
 ```
 
-Bundle release sẽ nằm trong `mhm/src-tauri/target/release/bundle/`.
+Release bundles are generated under `mhm/src-tauri/target/release/bundle/`.
 
 ## Verification
 
@@ -151,24 +155,24 @@ cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-Nếu chỉ cần chạy frontend web thay vì full desktop app:
+If you only need the web UI during frontend work:
 
 ```bash
 cd CapyInn/mhm
 npm run dev
 ```
 
-## Cấu trúc repository
+## Repository layout
 
 ```text
 CapyInn/
 ├── mhm/
 │   ├── src/                # React UI, stores, pages, components
 │   ├── src-tauri/          # Rust backend, IPC commands, DB, gateway, OCR
-│   ├── tests/              # Vitest suites và mocked desktop flows
+│   ├── tests/              # Vitest suites and mocked desktop flows
 │   ├── public/             # Static assets
 │   └── models/             # OCR models
-├── docs/plans/             # Kế hoạch sản phẩm và refactor cấp cao
+├── docs/plans/             # Product plans and higher-level refactor notes
 ├── PRD.md                  # Product requirements
 ├── CONTRIBUTING.md
 ├── SECURITY.md
@@ -177,11 +181,11 @@ CapyInn/
 
 ## Known limitations
 
-- Luồng OCR hiện tối ưu cho CCCD Việt Nam; passport và giấy tờ quốc tế chưa hoàn chỉnh
-- Windows và Linux chưa phải target chính thức
-- Project đang phù hợp nhất cho quy mô mini hotel, không nhắm tới chuỗi khách sạn lớn
+- OCR is currently optimized for Vietnamese national ID cards; passports and international documents are not complete yet
+- Windows and Linux are not first-class targets yet
+- The project is designed for mini-hotel scale, not large chain operations
 
-## Tài liệu liên quan
+## Additional docs
 
 - [PRD](PRD.md)
 - [Implementation plans](docs/plans)
@@ -189,18 +193,18 @@ CapyInn/
 - [Security policy](SECURITY.md)
 - [Changelog](CHANGELOG.md)
 
-## Đóng góp
+## Contributing
 
-Nếu muốn đóng góp, đọc [CONTRIBUTING.md](CONTRIBUTING.md) trước khi mở pull request.
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before opening a pull request.
 
-Checklist ngắn:
+Short checklist:
 
-1. Fork repo
-2. Tạo branch mới từ `main`
-3. Giữ commit message theo Conventional Commits
-4. Chạy lại `npm test`, `npm run build`, `cargo check`, `cargo test`, `cargo clippy`
-5. Mở pull request với mô tả scope và verification
+1. Fork the repository
+2. Create a branch from `main`
+3. Keep commit messages in Conventional Commits format
+4. Re-run `npm test`, `npm run build`, `cargo check`, `cargo test`, and `cargo clippy`
+5. Open a pull request with scope and verification notes
 
 ## License
 
-CapyInn được phát hành dưới giấy phép [MIT](LICENSE).
+CapyInn is released under the [MIT License](LICENSE).
