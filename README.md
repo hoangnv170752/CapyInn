@@ -55,7 +55,6 @@ CapyInn is a desktop app for mini hotels and guesthouses that need a local-first
 - [Verification](#verification)
 - [Repository layout](#repository-layout)
 - [Known limitations](#known-limitations)
-- [Additional docs](#additional-docs)
 - [Contributing](#contributing)
 - [License](#license)
 
@@ -226,7 +225,6 @@ CapyInn/
 │   ├── tests/              # Vitest suites and mocked desktop flows
 │   ├── public/             # Static assets
 │   └── models/             # OCR models
-├── PRD.md                  # Product requirements
 ├── CONTRIBUTING.md
 ├── SECURITY.md
 └── README.md
@@ -237,13 +235,6 @@ CapyInn/
 - OCR is currently optimized for Vietnamese national ID cards; passports and international documents are not complete yet
 - Windows and Linux are not first-class targets yet
 - The project is designed for mini-hotel scale, not large chain operations
-
-## Additional docs
-
-- [PRD](PRD.md)
-- [Contributing guide](CONTRIBUTING.md)
-- [Security policy](SECURITY.md)
-- [Changelog](CHANGELOG.md)
 
 ## Contributing
 
